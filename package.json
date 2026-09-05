@@ -1,0 +1,23 @@
+{
+  "name": "dealflow360",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-Tenant Quote-to-Cash Platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "docker compose up --build",
+    "down": "docker compose down",
+    "down:clean": "docker compose down -v",
+    "logs": "docker compose logs -f",
+    "migrate": "docker compose exec api npx prisma migrate dev",
+    "migrate:status": "docker compose exec api npx prisma migrate status",
+    "studio": "docker compose exec api npx prisma studio",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

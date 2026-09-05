@@ -1,0 +1,189 @@
+name: dealflow360
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [dealflow]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [dealflow]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [dealflow]
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing local/$${MINIO_BUCKET};
+      echo 'minio bucket ready';
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    networks: [dealflow]
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks: [dealflow]
+
+  bootstrap:
+    image: node:24-alpine
+    working_dir: /repo
+    command: >
+      /bin/sh -c "
+      apk add --no-cache openssl libc6-compat >/dev/null;
+      echo '[bootstrap] npm install...';
+      npm install --no-audit --no-fund;
+      echo '[bootstrap] prisma generate...';
+      npm run prisma:generate -w @dealflow/api;
+      echo '[bootstrap] done';
+      "
+    volumes:
+      - .:/repo
+      - node_modules:/repo/node_modules
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    networks: [dealflow]
+
+  migrate:
+    image: node:24-alpine
+    working_dir: /repo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    command: >
+      /bin/sh -c "
+      apk add --no-cache openssl libc6-compat >/dev/null;
+      npm run prisma:deploy -w @dealflow/api;
+      "
+    volumes:
+      - .:/repo
+      - node_modules:/repo/node_modules
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    networks: [dealflow]
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      API_PORT: ${API_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_PORT: ${MINIO_PORT}
+      MINIO_USE_SSL: ${MINIO_USE_SSL}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/repo
+      - node_modules:/repo/node_modules
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [dealflow]
+
+  workspace:
+    build:
+      context: .
+      dockerfile: apps/workspace/Dockerfile
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/repo
+      - node_modules:/repo/node_modules
+    networks: [dealflow]
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      api:
+        condition: service_started
+      workspace:
+        condition: service_started
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
+    networks: [dealflow]
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  node_modules:
+
+networks:
+  dealflow:
+    driver: bridge

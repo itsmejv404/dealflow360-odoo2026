@@ -1,0 +1,14 @@
+{
+  "extends": "@dealflow/tsconfig/base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "types": ["vite/client"],
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue", "env.d.ts"]
+}
