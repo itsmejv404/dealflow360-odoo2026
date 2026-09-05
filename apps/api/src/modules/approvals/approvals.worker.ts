@@ -1,5 +1,11 @@
-﻿import { Worker, type Job } from 'bullmq';
-import { bullRedisConnection, APPROVAL_NOTIFICATION_QUEUE, type ApprovalNotificationJobPayload } from '../../lib/queue.js';
+import { Worker, type Job } from 'bullmq';
+import {
+  bullRedisConnection,
+  APPROVAL_NOTIFICATION_QUEUE,
+  approvalNotificationQueue,
+  registerWorker,
+  type ApprovalNotificationJobPayload,
+} from '../../lib/queue.js';
 import {
   sendApprovalRequestedEmail,
   sendApprovalDecisionEmail,
@@ -127,6 +133,8 @@ export function startApprovalNotificationWorker(): Worker<ApprovalNotificationJo
   worker.on('failed', (job: Job | undefined, err: Error) => {
     logger.error({ jobId: job?.id, queue: APPROVAL_NOTIFICATION_QUEUE, err: err.message }, 'Approval notification job failed');
   });
+
+  registerWorker('org_approval_notifications', 'Approval Notifications & Negotiation', approvalNotificationQueue, worker, 5);
 
   return worker;
 }

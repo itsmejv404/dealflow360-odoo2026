@@ -21,7 +21,38 @@ export interface PlanViewAllocation {
   quantity: number;
 }
 
-export type PlanLineStatus = 'fulfilled' | 'ready' | 'split' | 'partial' | 'shortfall';
+export type PlanLineStatus = 'fulfilled' | 'ready' | 'split' | 'partial' | 'shortfall' | 'backordered';
+
+export interface BackorderView {
+  id: string;
+  quotationId: string;
+  quotationLineId: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  quantity: number;
+  fulfilledQty: number;
+  pendingQty: number;
+  status: 'pending' | 'partially_consolidated' | 'consolidated' | 'cancelled';
+  createdAt: string;
+}
+
+export interface ConsolidationPromptView {
+  id: string;
+  quotationId: string;
+  quotationNumber: string;
+  customerName?: string;
+  backorderItemId: string;
+  warehouseId: string;
+  warehouseName: string;
+  warehouseCode: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  suggestedQty: number;
+  status: 'pending' | 'consolidated' | 'dismissed';
+  createdAt: string;
+}
 
 export interface PlanViewLine {
   quotationLineId: string;
@@ -55,6 +86,8 @@ export interface PlanView {
     currency: string;
   };
   lines: PlanViewLine[];
+  backorders: BackorderView[];
+  prompts: ConsolidationPromptView[];
 }
 
 interface AllocationDraft {
@@ -94,15 +127,31 @@ export class FulfillmentService {
 
   private async loadPlanView(orgId: string, quotationId: string): Promise<PlanView> {
     const quotation = await this.loadQuotation(orgId, quotationId);
-    const plan = await prisma.fulfillmentPlan.findUnique({
-      where: { organizationId_quotationId: { organizationId: orgId, quotationId } },
-      include: {
-        lines: {
-          include: { warehouse: { select: { id: true, name: true, code: true } } },
-          orderBy: [{ quantity: 'desc' as const }],
+    const [plan, backorderItems, activePrompts] = await Promise.all([
+      prisma.fulfillmentPlan.findUnique({
+        where: { organizationId_quotationId: { organizationId: orgId, quotationId } },
+        include: {
+          lines: {
+            include: { warehouse: { select: { id: true, name: true, code: true } } },
+            orderBy: [{ quantity: 'desc' as const }],
+          },
         },
-      },
-    });
+      }),
+      prisma.backorderItem.findMany({
+        where: { organizationId: orgId, quotationId },
+        include: { product: { select: { name: true, sku: true } } },
+        orderBy: { createdAt: 'asc' },
+      }),
+      prisma.consolidationPrompt.findMany({
+        where: { organizationId: orgId, quotationId, status: 'pending' },
+        include: {
+          warehouse: { select: { name: true, code: true } },
+          product: { select: { name: true, sku: true } },
+          quotation: { select: { quotationNumber: true, customer: { select: { name: true } } } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
 
     const lines: PlanViewLine[] = quotation.lines.map((ql) => {
       const allocations: PlanViewAllocation[] = (plan?.lines ?? [])
@@ -120,7 +169,7 @@ export class FulfillmentService {
         plan?.status === 'accepted'
           ? shortfall === 0
             ? 'fulfilled'
-            : 'shortfall'
+            : 'backordered'
           : shortfall > 0 && allocatedTotal === 0
             ? 'shortfall'
             : shortfall > 0
@@ -142,6 +191,37 @@ export class FulfillmentService {
       };
     });
 
+    const backorders: BackorderView[] = backorderItems.map((b) => ({
+      id: b.id,
+      quotationId: b.quotationId,
+      quotationLineId: b.quotationLineId,
+      productId: b.productId,
+      productName: b.product?.name || 'Product',
+      sku: b.product?.sku || '',
+      quantity: b.quantity,
+      fulfilledQty: b.fulfilledQty,
+      pendingQty: Math.max(0, b.quantity - b.fulfilledQty),
+      status: b.status as any,
+      createdAt: b.createdAt.toISOString(),
+    }));
+
+    const prompts: ConsolidationPromptView[] = activePrompts.map((p) => ({
+      id: p.id,
+      quotationId: p.quotationId,
+      quotationNumber: p.quotation.quotationNumber,
+      customerName: p.quotation.customer?.name,
+      backorderItemId: p.backorderItemId,
+      warehouseId: p.warehouseId,
+      warehouseName: p.warehouse.name,
+      warehouseCode: p.warehouse.code,
+      productId: p.productId,
+      productName: p.product?.name || 'Product',
+      sku: p.product?.sku || '',
+      suggestedQty: p.suggestedQty,
+      status: p.status as any,
+      createdAt: p.createdAt.toISOString(),
+    }));
+
     return {
       plan: {
         id: plan?.id ?? '',
@@ -162,6 +242,8 @@ export class FulfillmentService {
         currency: quotation.organization.currency,
       },
       lines,
+      backorders,
+      prompts,
     };
   }
 
@@ -528,6 +610,39 @@ export class FulfillmentService {
           acceptedAt: new Date(),
         },
       });
+
+      // Phase 17: Persist backorders for lines with shortfalls
+      for (const ql of quotation.lines) {
+        const allocatedForLine = plan.lines
+          .filter((pl) => pl.quotationLineId === ql.id)
+          .reduce((sum, pl) => sum + pl.quantity, 0);
+        const shortfall = Math.max(0, ql.quantity - allocatedForLine);
+
+        if (shortfall > 0) {
+          const existingBackorder = await tx.backorderItem.findFirst({
+            where: { organizationId: orgId, quotationLineId: ql.id },
+          });
+          if (existingBackorder) {
+            await tx.backorderItem.update({
+              where: { id: existingBackorder.id },
+              data: { quantity: shortfall, fulfilledQty: 0, status: 'pending' },
+            });
+          } else {
+            await tx.backorderItem.create({
+              data: {
+                organizationId: orgId,
+                quotationId,
+                quotationLineId: ql.id,
+                productId: ql.productId,
+                planId: plan.id,
+                quantity: shortfall,
+                fulfilledQty: 0,
+                status: 'pending',
+              },
+            });
+          }
+        }
+      }
     });
 
     await warehousesService.invalidateStockCache(orgId);
@@ -549,6 +664,235 @@ export class FulfillmentService {
 
     logger.info({ orgId, quotationId, actor: actor.email }, 'Fulfillment plan accepted; stock deducted');
     return this.loadPlanView(orgId, quotationId);
+  }
+
+  // ==================== PHASE 17 - BACKORDERS & CONSOLIDATION ====================
+
+  async consolidatePrompt(orgId: string, promptId: string, actor: UserContext): Promise<PlanView> {
+    const prompt = await prisma.consolidationPrompt.findFirst({
+      where: { id: promptId, organizationId: orgId },
+      include: {
+        quotation: true,
+        backorderItem: true,
+        warehouse: true,
+        product: true,
+      },
+    });
+    if (!prompt) {
+      throw new HttpError(404, 'Consolidation prompt not found in this organization');
+    }
+    if (prompt.status !== 'pending') {
+      throw new HttpError(400, `This consolidation prompt has already been ${prompt.status}`);
+    }
+
+    const plan = await prisma.fulfillmentPlan.findUnique({
+      where: { organizationId_quotationId: { organizationId: orgId, quotationId: prompt.quotationId } },
+      include: { lines: true },
+    });
+    if (!plan) {
+      throw new HttpError(404, 'Fulfillment plan not found for this quotation');
+    }
+
+    // Verify live stock in target warehouse
+    const currentStock = await prisma.stockLevel.findFirst({
+      where: {
+        organizationId: orgId,
+        warehouseId: prompt.warehouseId,
+        productId: prompt.productId,
+      },
+    });
+    const liveQty = currentStock?.quantity ?? 0;
+    if (liveQty < prompt.suggestedQty) {
+      throw new HttpError(
+        409,
+        `Not enough stock in warehouse "${prompt.warehouse.name}" to consolidate (available: ${liveQty}, requested: ${prompt.suggestedQty}).`
+      );
+    }
+
+    // Execute consolidation transaction
+    await prisma.$transaction(async (tx) => {
+      // 1. Deduct stock from warehouse
+      await tx.stockLevel.update({
+        where: { id: currentStock!.id },
+        data: { quantity: Math.max(0, liveQty - prompt.suggestedQty) },
+      });
+
+      // 2. Add or increment fulfillment line
+      const existingLine = await tx.fulfillmentLine.findFirst({
+        where: {
+          organizationId: orgId,
+          planId: plan.id,
+          quotationLineId: prompt.backorderItem.quotationLineId,
+          warehouseId: prompt.warehouseId,
+        },
+      });
+
+      if (existingLine) {
+        await tx.fulfillmentLine.update({
+          where: { id: existingLine.id },
+          data: { quantity: existingLine.quantity + prompt.suggestedQty },
+        });
+      } else {
+        await tx.fulfillmentLine.create({
+          data: {
+            organizationId: orgId,
+            planId: plan.id,
+            quotationLineId: prompt.backorderItem.quotationLineId,
+            productId: prompt.productId,
+            warehouseId: prompt.warehouseId,
+            quantity: prompt.suggestedQty,
+          },
+        });
+      }
+
+      // 3. Update BackorderItem fulfilledQty and status
+      const newFulfilledQty = prompt.backorderItem.fulfilledQty + prompt.suggestedQty;
+      const isFullyConsolidated = newFulfilledQty >= prompt.backorderItem.quantity;
+      await tx.backorderItem.update({
+        where: { id: prompt.backorderItemId },
+        data: {
+          fulfilledQty: newFulfilledQty,
+          status: isFullyConsolidated ? 'consolidated' : 'partially_consolidated',
+        },
+      });
+
+      // 4. Update ConsolidationPrompt
+      await tx.consolidationPrompt.update({
+        where: { id: prompt.id },
+        data: {
+          status: 'consolidated',
+          consolidatedAt: new Date(),
+          consolidatedById: actor.userId,
+        },
+      });
+    });
+
+    // Recompute shipment count and metrics
+    await this.recomputePlanMetrics(orgId, plan.id);
+    await warehousesService.invalidateStockCache(orgId);
+
+    // Audit log
+    await approvalsService.logAudit(orgId, {
+      entityType: 'quotation',
+      entityId: prompt.quotationId,
+      user: { userId: actor.userId, email: actor.email, role: actor.role },
+      action: 'backorder_consolidated',
+      reason: `Consolidated ${prompt.suggestedQty} unit(s) of ${prompt.product.name} from ${prompt.warehouse.name}.`,
+      metadata: {
+        promptId: prompt.id,
+        backorderItemId: prompt.backorderItemId,
+        warehouseId: prompt.warehouseId,
+        productId: prompt.productId,
+        quantityConsolidated: prompt.suggestedQty,
+      },
+    });
+
+    // Realtime notifications
+    emitToOrg(orgId, 'inventory:updated', {
+      warehouseId: prompt.warehouseId,
+      productId: prompt.productId,
+      type: 'backorder_consolidation',
+    });
+    emitToOrg(orgId, 'fulfillment:updated', {
+      quotationId: prompt.quotationId,
+      action: 'consolidated',
+    });
+    emitToOrg(orgId, 'fulfillment:prompt_resolved', {
+      promptId: prompt.id,
+      quotationId: prompt.quotationId,
+      action: 'consolidated',
+    });
+
+    logger.info(
+      { orgId, promptId: prompt.id, quotationId: prompt.quotationId, actor: actor.email },
+      'Backorder prompt consolidated successfully'
+    );
+
+    return this.loadPlanView(orgId, prompt.quotationId);
+  }
+
+  async dismissPrompt(orgId: string, promptId: string, actor: UserContext) {
+    const prompt = await prisma.consolidationPrompt.findFirst({
+      where: { id: promptId, organizationId: orgId },
+    });
+    if (!prompt) {
+      throw new HttpError(404, 'Consolidation prompt not found in this organization');
+    }
+
+    await prisma.consolidationPrompt.update({
+      where: { id: promptId },
+      data: { status: 'dismissed' },
+    });
+
+    emitToOrg(orgId, 'fulfillment:prompt_resolved', {
+      promptId,
+      quotationId: prompt.quotationId,
+      action: 'dismissed',
+    });
+
+    logger.info({ orgId, promptId, actor: actor.email }, 'Consolidation prompt dismissed');
+    return { success: true };
+  }
+
+  async listBackorders(orgId: string): Promise<BackorderView[]> {
+    const items = await prisma.backorderItem.findMany({
+      where: {
+        organizationId: orgId,
+        status: { in: ['pending', 'partially_consolidated'] },
+      },
+      include: {
+        product: { select: { name: true, sku: true } },
+        quotation: { select: { quotationNumber: true, customer: { select: { name: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return items.map((b) => ({
+      id: b.id,
+      quotationId: b.quotationId,
+      quotationLineId: b.quotationLineId,
+      productId: b.productId,
+      productName: b.product.name,
+      sku: b.product.sku,
+      quantity: b.quantity,
+      fulfilledQty: b.fulfilledQty,
+      pendingQty: Math.max(0, b.quantity - b.fulfilledQty),
+      status: b.status as any,
+      createdAt: b.createdAt.toISOString(),
+    }));
+  }
+
+  async listPrompts(orgId: string, quotationId?: string): Promise<ConsolidationPromptView[]> {
+    const prompts = await prisma.consolidationPrompt.findMany({
+      where: {
+        organizationId: orgId,
+        status: 'pending',
+        ...(quotationId ? { quotationId } : {}),
+      },
+      include: {
+        warehouse: { select: { name: true, code: true } },
+        product: { select: { name: true, sku: true } },
+        quotation: { select: { quotationNumber: true, customer: { select: { name: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return prompts.map((p) => ({
+      id: p.id,
+      quotationId: p.quotationId,
+      quotationNumber: p.quotation.quotationNumber,
+      customerName: p.quotation.customer?.name,
+      backorderItemId: p.backorderItemId,
+      warehouseId: p.warehouseId,
+      warehouseName: p.warehouse.name,
+      warehouseCode: p.warehouse.code,
+      productId: p.productId,
+      productName: p.product.name,
+      sku: p.product.sku,
+      suggestedQty: p.suggestedQty,
+      status: p.status as any,
+      createdAt: p.createdAt.toISOString(),
+    }));
   }
 }
 

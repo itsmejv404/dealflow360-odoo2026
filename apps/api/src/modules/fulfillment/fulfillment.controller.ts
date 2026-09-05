@@ -3,12 +3,13 @@ import { z } from 'zod';
 import { fulfillmentService } from './fulfillment.service.js';
 import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 import type { UserContext } from '../approvals/approvals.service.js';
+import { getQueueHealthStatus } from '../../lib/queue.js';
 
 const allocationsSchema = z.object({
   allocations: z
     .array(
       z.object({
-        warehouseId: z.string().uuid('A valid warehouse is required'),
+        warehouseId: z.string().min(1, 'A valid warehouse is required'),
         quantity: z.number().int('Quantity must be a whole number').min(1, 'Quantity must be at least 1'),
       })
     )
@@ -86,6 +87,62 @@ export class FulfillmentController {
       if (!quotationId) throw new HttpError(400, 'Quotation ID is required');
       const view = await fulfillmentService.acceptPlan(tenant.orgId, quotationId, this.actor(req));
       res.json(view);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ==================== PHASE 17 ENDPOINTS ====================
+
+  async listBackorders(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = this.tenant(req).orgId;
+      const backorders = await fulfillmentService.listBackorders(orgId);
+      res.json({ backorders });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async listPrompts(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = this.tenant(req).orgId;
+      const quotationId = req.query.quotationId as string | undefined;
+      const prompts = await fulfillmentService.listPrompts(orgId, quotationId);
+      res.json({ prompts });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async consolidatePrompt(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const tenant = this.tenant(req);
+      const promptId = req.params.id as string;
+      if (!promptId) throw new HttpError(400, 'Prompt ID is required');
+      const view = await fulfillmentService.consolidatePrompt(tenant.orgId, promptId, this.actor(req));
+      res.json(view);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async dismissPrompt(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const tenant = this.tenant(req);
+      const promptId = req.params.id as string;
+      if (!promptId) throw new HttpError(400, 'Prompt ID is required');
+      const result = await fulfillmentService.dismissPrompt(tenant.orgId, promptId, this.actor(req));
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async getQueueStatus(_req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const report = await getQueueHealthStatus();
+      res.json(report);
     } catch (err) {
       next(err);
     }

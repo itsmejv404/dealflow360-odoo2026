@@ -32,6 +32,12 @@ const setStockSchema = z.object({
   quantity: z.number().int('Stock quantity must be a whole number').min(0, 'Stock cannot be negative'),
 });
 
+const stockArrivalSchema = z.object({
+  warehouseId: z.string().min(1, 'Warehouse ID required'),
+  productId: z.string().min(1, 'Product ID required'),
+  quantityAdded: z.number().int('Arrival quantity must be a whole number').positive('Arrival quantity must be greater than 0'),
+});
+
 export class WarehousesController {
   private parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
     const result = schema.safeParse(body);
@@ -129,6 +135,22 @@ export class WarehousesController {
       const { quantity } = this.parseBody(setStockSchema, req.body);
       const level = await warehousesService.setStock(orgId, warehouseId, productId, quantity);
       res.json({ stockLevel: level });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async recordStockArrival(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = req.tenant!.orgId;
+      const data = this.parseBody(stockArrivalSchema, req.body);
+      const result = await warehousesService.recordStockArrival(
+        orgId,
+        data.warehouseId,
+        data.productId,
+        data.quantityAdded
+      );
+      res.status(201).json(result);
     } catch (err) {
       next(err);
     }

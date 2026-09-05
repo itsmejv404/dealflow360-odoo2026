@@ -1,4 +1,4 @@
-﻿-- CreateTable
+-- CreateTable
 CREATE TABLE "warehouses" (
     "id" TEXT NOT NULL,
     "organization_id" TEXT NOT NULL,

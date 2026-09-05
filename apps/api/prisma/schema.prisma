@@ -54,6 +54,8 @@ model Organization {
   shippingRuleConfig  ShippingRuleConfig?
   fulfillmentPlans    FulfillmentPlan[]
   fulfillmentLines    FulfillmentLine[]
+  backorderItems      BackorderItem[]
+  consolidationPrompts ConsolidationPrompt[]
 
   @@map("organizations")
 }
@@ -76,6 +78,7 @@ model User {
   negotiationComments   NegotiationComment[] @relation("NegotiationAuthor")
   resolvedChangeRequests ChangeRequest[]     @relation("ChangeRequestResolvedBy")
   decidedCounterProposals CounterProposal[]  @relation("CounterProposalDecidedBy")
+  consolidatedPrompts   ConsolidationPrompt[] @relation("ConsolidatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -163,6 +166,8 @@ model Product {
   stockLevels    StockLevel[]
   primaryAffinities      ProductAffinity[] @relation("PrimaryAffinity")
   recommendedAffinities  ProductAffinity[] @relation("RecommendedAffinity")
+  backorderItems         BackorderItem[]
+  consolidationPrompts   ConsolidationPrompt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, sku])
@@ -308,6 +313,8 @@ model Quotation {
   changeRequests      ChangeRequest[]
   counterProposals    CounterProposal[]
   fulfillmentPlans    FulfillmentPlan[]
+  backorderItems      BackorderItem[]
+  consolidationPrompts ConsolidationPrompt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, quotationNumber])
@@ -348,6 +355,7 @@ model QuotationLine {
   changeRequests      ChangeRequest[]
   counterProposals    CounterProposal[]
   fulfillmentLines    FulfillmentLine[]
+  backorderItems      BackorderItem[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -414,7 +422,7 @@ model AuditLog {
   userId         String?  @map("user_id")
   userEmail      String?  @map("user_email")
   userRole       String?  @map("user_role")
-  action         String   // "created" | "updated" | "deleted" | "submitted_for_approval" | "manager_approved" | "finance_escalated" | "finance_approved" | "rejected" | "edited" | "auto_approved" | "sent_to_customer" | "customer_commented" | "change_requested" | "counter_proposed" | "counter_accepted" | "counter_declined" | "change_request_accepted" | "change_request_declined" | "customer_confirmed" | "reentered_approval" | "deal_reopened" | "fulfillment_accepted"
+  action         String   // "created" | "updated" | "deleted" | "submitted_for_approval" | "manager_approved" | "finance_escalated" | "finance_approved" | "rejected" | "edited" | "auto_approved" | "sent_to_customer" | "customer_commented" | "change_requested" | "counter_proposed" | "counter_accepted" | "counter_declined" | "change_request_accepted" | "change_request_declined" | "customer_confirmed" | "reentered_approval" | "deal_reopened" | "fulfillment_accepted" | "backorder_consolidated"
   reason         String?
   metadata       Json?
   createdAt      DateTime @default(now()) @map("created_at")
@@ -529,6 +537,7 @@ model Warehouse {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   stockLevels  StockLevel[]
   fulfillmentLines FulfillmentLine[]
+  consolidationPrompts ConsolidationPrompt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, code])
@@ -594,6 +603,7 @@ model FulfillmentPlan {
   organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   quotation    Quotation        @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
   lines        FulfillmentLine[]
+  backorderItems BackorderItem[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, quotationId])
@@ -622,4 +632,62 @@ model FulfillmentLine {
   @@index([organizationId])
   @@index([organizationId, planId])
   @@map("fulfillment_lines")
+}
+
+// ==================== PHASE 17 - BACKORDERS & AUTO-CONSOLIDATION ====================
+
+model BackorderItem {
+  id              String    @id @default(uuid())
+  organizationId  String    @map("organization_id")
+  quotationId     String    @map("quotation_id")
+  quotationLineId String    @map("quotation_line_id")
+  productId       String    @map("product_id")
+  planId          String    @map("plan_id")
+  quantity        Int
+  fulfilledQty    Int       @default(0) @map("fulfilled_qty")
+  status          String    @default("pending") @map("status") // "pending" | "partially_consolidated" | "consolidated" | "cancelled"
+  notes           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation     Quotation       @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
+  quotationLine QuotationLine   @relation(fields: [organizationId, quotationLineId], references: [organizationId, id], onDelete: Cascade)
+  product       Product         @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Cascade)
+  plan          FulfillmentPlan @relation(fields: [organizationId, planId], references: [organizationId, id], onDelete: Cascade)
+  prompts       ConsolidationPrompt[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([organizationId, productId, status])
+  @@index([organizationId, quotationId])
+  @@map("backorder_items")
+}
+
+model ConsolidationPrompt {
+  id               String    @id @default(uuid())
+  organizationId   String    @map("organization_id")
+  quotationId      String    @map("quotation_id")
+  backorderItemId  String    @map("backorder_item_id")
+  warehouseId      String    @map("warehouse_id")
+  productId        String    @map("product_id")
+  suggestedQty     Int       @map("suggested_qty")
+  status           String    @default("pending") @map("status") // "pending" | "consolidated" | "dismissed"
+  consolidatedAt   DateTime? @map("consolidated_at")
+  consolidatedById String?   @map("consolidated_by_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation      Quotation      @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
+  backorderItem  BackorderItem  @relation(fields: [organizationId, backorderItemId], references: [organizationId, id], onDelete: Cascade)
+  warehouse      Warehouse      @relation(fields: [organizationId, warehouseId], references: [organizationId, id], onDelete: Restrict)
+  product        Product        @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Cascade)
+  consolidatedBy User?          @relation("ConsolidatedBy", fields: [consolidatedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, quotationId])
+  @@map("consolidation_prompts")
 }

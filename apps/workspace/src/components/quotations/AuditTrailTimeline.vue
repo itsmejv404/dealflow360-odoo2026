@@ -167,6 +167,85 @@ function getActionInfo(action: string) {
         color: 'text-amber-600 bg-amber-50 border-amber-200 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-800',
         icon: ArrowUpRight,
       };
+    case 'created':
+      return {
+        label: 'Draft Created',
+        color: 'text-muted-foreground bg-muted border-border',
+        icon: FileText,
+      };
+    case 'updated':
+    case 'edited':
+      return {
+        label: 'Quotation Updated',
+        color: 'text-muted-foreground bg-muted border-border',
+        icon: Pencil,
+      };
+    case 'deleted':
+      return {
+        label: 'Quotation Deleted',
+        color: 'text-destructive bg-destructive/10 border-destructive/20',
+        icon: Trash2,
+      };
+    case 'sent_to_customer':
+      return {
+        label: 'Portal Link Sent to Customer',
+        color: 'text-blue-600 bg-blue-50 border-blue-200 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-800',
+        icon: Send,
+      };
+    case 'customer_commented':
+      return {
+        label: 'Customer Message',
+        color: 'text-indigo-600 bg-indigo-50 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-800',
+        icon: MessageSquare,
+      };
+    case 'change_requested':
+      return {
+        label: 'Change Requested by Customer',
+        color: 'text-sky-600 bg-sky-50 border-sky-200 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-800',
+        icon: FileEdit,
+      };
+    case 'counter_proposed':
+      return {
+        label: 'Counter-Discount Proposed',
+        color: 'text-amber-600 bg-amber-50 border-amber-200 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-800',
+        icon: ArrowLeftRight,
+      };
+    case 'counter_accepted':
+      return {
+        label: 'Counter-Discount Accepted',
+        color: 'text-emerald-600 bg-emerald-50 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800',
+        icon: CheckCircle2,
+      };
+    case 'counter_declined':
+      return {
+        label: 'Counter-Discount Declined',
+        color: 'text-destructive bg-destructive/10 border-destructive/20',
+        icon: XCircle,
+      };
+    case 'change_request_accepted':
+      return {
+        label: 'Change Request Accepted',
+        color: 'text-emerald-600 bg-emerald-50 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800',
+        icon: CheckCircle2,
+      };
+    case 'change_request_declined':
+      return {
+        label: 'Change Request Declined',
+        color: 'text-destructive bg-destructive/10 border-destructive/20',
+        icon: XCircle,
+      };
+    case 'customer_confirmed':
+      return {
+        label: 'Deal Closed by Customer',
+        color: 'text-purple-600 bg-purple-50 border-purple-200 dark:bg-purple-950/50 dark:text-purple-400 dark:border-purple-800',
+        icon: BadgeCheck,
+      };
+    case 'reentered_approval':
+      return {
+        label: 'Re-entered Approval (Thresholds Exceeded)',
+        color: 'text-amber-600 bg-amber-50 border-amber-200 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-800',
+        icon: ArrowUpRight,
+      };
     case 'deal_reopened':
       return {
         label: 'Deal Re-opened by Customer',
@@ -177,6 +256,12 @@ function getActionInfo(action: string) {
       return {
         label: 'Fulfillment Accepted — Stock Reserved',
         color: 'text-emerald-600 bg-emerald-50 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800',
+        icon: PackageCheck,
+      };
+    case 'backorder_consolidated':
+      return {
+        label: 'Backorder Consolidated — Stock Allocated',
+        color: 'text-blue-600 bg-blue-50 border-blue-200 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-800',
         icon: PackageCheck,
       };
     default:

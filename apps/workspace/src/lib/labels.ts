@@ -69,6 +69,8 @@ export function fulfillmentStatusLabel(
       return { label: 'Split across warehouses', class: 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-300 border-blue-200' };
     case 'partial':
       return { label: 'Partially covered', class: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300' };
+    case 'backordered':
+      return { label: 'Backordered', class: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300' };
     case 'shortfall':
       return { label: 'Not enough stock', class: 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-300' };
     default:

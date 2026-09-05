@@ -53,6 +53,11 @@ async function runFulfillmentIsolationTest() {
   const cablesA = orgA.products.find((p) => p.sku === 'ACME-ACC-CAB');
   if (!rackA || !cablesA) throw new Error('Seeded products missing');
 
+  await warehousesService.setStock(orgA.id, whCentral.id, rackA.id, 12);
+  await warehousesService.setStock(orgA.id, whCentral.id, cablesA.id, 4);
+  await warehousesService.setStock(orgA.id, whOther.id, rackA.id, 3);
+  await warehousesService.setStock(orgA.id, whOther.id, cablesA.id, 18);
+
   const rackCentral0 = await prisma.stockLevel.findFirst({
     where: { organizationId: orgA.id, warehouseId: whCentral.id, productId: rackA.id },
   });
@@ -295,6 +300,10 @@ async function runFulfillmentIsolationTest() {
     }
     console.log('[PASS] Test 9: HTTP RBAC - rep 403 on propose, ops reads + accepts');
   } finally {
+    await warehousesService.setStock(orgA.id, whCentral.id, rackA.id, 12);
+    await warehousesService.setStock(orgA.id, whCentral.id, cablesA.id, 4);
+    await warehousesService.setStock(orgA.id, whOther.id, rackA.id, 3);
+    await warehousesService.setStock(orgA.id, whOther.id, cablesA.id, 18);
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
 

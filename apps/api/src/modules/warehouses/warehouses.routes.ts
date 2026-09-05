@@ -41,7 +41,13 @@ warehousesRouter.delete(
   (req, res, next) => warehousesController.deleteWarehouse(req, res, next)
 );
 
-// Stock adjustments: Org Admin + Ops (fulfillment) — the day-to-day owners of inventory.
+// Stock arrival / adjustments: Org Admin + Ops (fulfillment)
+warehousesRouter.post(
+  '/stock/arrival',
+  requireRoles(['org_admin', 'ops']),
+  (req, res, next) => warehousesController.recordStockArrival(req, res, next)
+);
+
 warehousesRouter.put(
   '/:warehouseId/stock/:productId',
   requireRoles(['org_admin', 'ops']),

@@ -56,6 +56,9 @@ import {
   FileEdit,
   Boxes,
   Pencil,
+  Zap,
+  Clock,
+  RefreshCw,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -1006,7 +1009,36 @@ interface FulfillmentLineView {
   allocations: FulfillmentAllocation[];
   allocatedTotal: number;
   shortfall: number;
-  lineStatus: 'fulfilled' | 'ready' | 'split' | 'partial' | 'shortfall';
+  lineStatus: 'fulfilled' | 'ready' | 'split' | 'partial' | 'shortfall' | 'backordered';
+}
+
+interface BackorderView {
+  id: string;
+  quotationLineId: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  quantity: number;
+  fulfilledQuantity: number;
+  remainingQuantity: number;
+  status: 'pending' | 'partially_fulfilled' | 'fulfilled' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ConsolidationPromptView {
+  id: string;
+  planId: string;
+  warehouseId: string;
+  warehouseName: string;
+  warehouseCode: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  proposedQuantity: number;
+  availableStock: number;
+  status: 'pending' | 'applied' | 'dismissed';
+  createdAt: string;
 }
 
 interface FulfillmentPlanView {
@@ -1029,6 +1061,8 @@ interface FulfillmentPlanView {
     currency: string;
   };
   lines: FulfillmentLineView[];
+  backorders?: BackorderView[];
+  prompts?: ConsolidationPromptView[];
 }
 
 const fulfillmentPlan = ref<FulfillmentPlanView | null>(null);
@@ -1036,6 +1070,19 @@ const isFulfillmentLoading = ref(false);
 const isFulfillmentBusy = ref<string | null>(null);
 const fulfillmentError = ref<string | null>(null);
 const fulfillmentNotice = ref<string | null>(null);
+
+const activePrompts = computed(() =>
+  fulfillmentPlan.value?.prompts?.filter((p) => p.status === 'pending') ?? []
+);
+
+const pendingBackorders = computed(() =>
+  fulfillmentPlan.value?.backorders?.filter((b) => b.status === 'pending' || b.status === 'partially_fulfilled') ?? []
+);
+
+const allBackorders = computed(() =>
+  fulfillmentPlan.value?.backorders ?? []
+);
+
 const canManageFulfillment = computed(() =>
   ['org_admin', 'ops'].includes(authStore.state.user?.role || '')
 );
@@ -1170,6 +1217,53 @@ async function acceptFulfillment() {
   }
 }
 
+async function handleConsolidate(prompt: ConsolidationPromptView) {
+  isFulfillmentBusy.value = `prompt-${prompt.id}`;
+  fulfillmentError.value = null;
+  try {
+    await apiRequest<{ success: boolean }>(
+      `/api/fulfillment/prompts/${prompt.id}/consolidate`,
+      { method: 'POST', body: '{}' }
+    );
+    fulfillmentNotice.value = `Backorder consolidated! ${prompt.proposedQuantity} unit(s) allocated from ${prompt.warehouseName}.`;
+    await loadFulfillment();
+    if (quoteId.value) {
+      await loadAuditTrail(quoteId.value);
+    }
+    setTimeout(() => {
+      if (fulfillmentNotice.value?.startsWith('Backorder consolidated')) {
+        fulfillmentNotice.value = null;
+      }
+    }, 4000);
+  } catch (err: any) {
+    fulfillmentError.value = err.message || 'Failed to consolidate backorder';
+  } finally {
+    isFulfillmentBusy.value = null;
+  }
+}
+
+async function handleDismissPrompt(prompt: ConsolidationPromptView) {
+  isFulfillmentBusy.value = `prompt-${prompt.id}`;
+  fulfillmentError.value = null;
+  try {
+    await apiRequest(
+      `/api/fulfillment/prompts/${prompt.id}/dismiss`,
+      { method: 'POST', body: '{}' }
+    );
+    fulfillmentNotice.value = 'Consolidation prompt dismissed.';
+    await loadFulfillment();
+    setTimeout(() => {
+      if (fulfillmentNotice.value === 'Consolidation prompt dismissed.') {
+        fulfillmentNotice.value = null;
+      }
+    }, 2500);
+  } catch (err: any) {
+    fulfillmentError.value = err.message || 'Failed to dismiss prompt';
+  } finally {
+    isFulfillmentBusy.value = null;
+  }
+}
+
 onMounted(() => {
   loadInitialData();
 
@@ -1211,6 +1305,19 @@ onMounted(() => {
         loadFulfillment();
       }
     });
+
+    // Phase 17: live backorder consolidation prompts & resolution
+    socket.on('fulfillment:backorder_prompt', (data: any) => {
+      if (data && data.quotationId === quoteId.value) {
+        loadFulfillment();
+      }
+    });
+
+    socket.on('fulfillment:prompt_resolved', (data: any) => {
+      if (data && data.quotationId === quoteId.value) {
+        loadFulfillment();
+      }
+    });
   } catch (err) {
     console.warn('Socket connection setup error:', err);
   }
@@ -1227,6 +1334,8 @@ onUnmounted(() => {
     socket.off('quote:updated');
     socket.off('negotiation:updated');
     socket.off('fulfillment:updated');
+    socket.off('fulfillment:backorder_prompt');
+    socket.off('fulfillment:prompt_resolved');
   } catch {
     // Non-fatal
   }
@@ -1873,6 +1982,57 @@ onUnmounted(() => {
               <div v-if="fulfillmentError" class="p-2 rounded-md bg-destructive/10 text-destructive text-xs">{{ fulfillmentError }}</div>
               <div v-if="fulfillmentNotice" class="p-2 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs">{{ fulfillmentNotice }}</div>
 
+              <!-- Real-time Consolidation Prompts (Phase 17) -->
+              <div
+                v-for="prompt in activePrompts"
+                :key="prompt.id"
+                class="p-4 rounded-lg bg-linear-to-r from-blue-500/10 via-indigo-500/10 to-primary/10 border border-blue-400/40 dark:border-blue-500/30 text-foreground text-xs shadow-xs"
+              >
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div class="flex items-start gap-3">
+                    <div class="p-2 rounded-full bg-blue-500/20 text-blue-600 dark:text-blue-400 shrink-0">
+                      <Zap class="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <span class="font-bold text-blue-700 dark:text-blue-300">
+                          ⚡ Stock Arrived — Consolidate Remaining Backorder
+                        </span>
+                        <Badge variant="outline" class="text-2xs bg-blue-500/10 text-blue-600 border-blue-300">
+                          Real-time Prompt
+                        </Badge>
+                      </div>
+                      <p class="text-muted-foreground mt-0.5 text-xs">
+                        Warehouse <span class="font-semibold text-foreground">{{ prompt.warehouseName }}</span> ({{ prompt.warehouseCode }}) received stock for
+                        <span class="font-semibold text-foreground">{{ prompt.productName }}</span>.
+                        <br />
+                        Can fulfill <span class="font-bold text-foreground">{{ prompt.proposedQuantity }} backordered unit(s)</span> immediately ({{ prompt.availableStock }} in stock).
+                      </p>
+                    </div>
+                  </div>
+                  <div v-if="canManageFulfillment" class="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-8 text-xs text-muted-foreground hover:text-foreground"
+                      :disabled="isFulfillmentBusy !== null"
+                      @click="handleDismissPrompt(prompt)"
+                    >
+                      Dismiss
+                    </Button>
+                    <Button
+                      size="sm"
+                      class="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-xs"
+                      :disabled="isFulfillmentBusy !== null"
+                      @click="handleConsolidate(prompt)"
+                    >
+                      <Zap class="w-3.5 h-3.5 mr-1" :class="{ 'animate-spin': isFulfillmentBusy === `prompt-${prompt.id}` }" />
+                      Consolidate Backorder
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
               <div v-if="isFulfillmentLoading" class="py-8 text-center text-xs text-muted-foreground">
                 <RefreshCw class="w-6 h-6 animate-spin mx-auto text-primary mb-2" />
                 Preparing the stock split proposal...
@@ -1972,6 +2132,60 @@ onUnmounted(() => {
                       Customer delivery was extended by {{ fulfillmentPlan.plan.deliveryExtendedDays }} days at no extra charge.
                     </template>
                   </span>
+                </div>
+
+                <!-- Backorders (Phase 17) -->
+                <div v-if="allBackorders.length > 0" class="pt-3 border-t border-border/70 space-y-2">
+                  <div class="flex items-center justify-between">
+                    <div class="text-xs font-semibold text-foreground flex items-center gap-2">
+                      <Clock class="w-3.5 h-3.5 text-amber-500" />
+                      Backordered Items ({{ pendingBackorders.length }} pending)
+                    </div>
+                    <span class="text-2xs text-muted-foreground">
+                      Auto-monitored by background consolidation worker
+                    </span>
+                  </div>
+                  <div class="rounded-md border border-border overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow class="bg-muted/40">
+                          <TableHead class="font-semibold text-xs">Product</TableHead>
+                          <TableHead class="text-center font-semibold text-xs">Backordered</TableHead>
+                          <TableHead class="text-center font-semibold text-xs">Fulfilled</TableHead>
+                          <TableHead class="text-center font-semibold text-xs">Remaining</TableHead>
+                          <TableHead class="text-center font-semibold text-xs">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        <TableRow v-for="bo in allBackorders" :key="bo.id" class="text-xs">
+                          <TableCell>
+                            <span class="font-semibold text-foreground">{{ bo.productName }}</span>
+                            <span class="text-2xs text-muted-foreground ml-1.5 font-mono">{{ bo.sku }}</span>
+                          </TableCell>
+                          <TableCell class="text-center font-mono">{{ bo.quantity }}</TableCell>
+                          <TableCell class="text-center font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
+                            {{ bo.fulfilledQuantity }}
+                          </TableCell>
+                          <TableCell class="text-center font-mono font-bold" :class="bo.remainingQuantity > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'">
+                            {{ bo.remainingQuantity }}
+                          </TableCell>
+                          <TableCell class="text-center">
+                            <Badge
+                              variant="outline"
+                              class="text-2xs uppercase"
+                              :class="bo.status === 'fulfilled'
+                                ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300'
+                                : bo.status === 'partially_fulfilled'
+                                  ? 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300'
+                                  : 'bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300'"
+                            >
+                              {{ bo.status.replace('_', ' ') }}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               </template>
 

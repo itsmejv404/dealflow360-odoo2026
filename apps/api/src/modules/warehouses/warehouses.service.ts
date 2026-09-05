@@ -3,6 +3,7 @@ import { redis } from '../../lib/redis.js';
 import { HttpError } from '../../shared/errors.js';
 import { emitToOrg } from '../../lib/socket.js';
 import { logger } from '../../lib/logger.js';
+import { backorderConsolidationQueue } from '../../lib/queue.js';
 
 export interface CreateWarehouseInput {
   name: string;
@@ -337,6 +338,11 @@ export class WarehousesService {
       throw new HttpError(404, 'Product not found in this organization');
     }
 
+    const existingLevel = await prisma.stockLevel.findFirst({
+      where: { organizationId: orgId, warehouseId, productId },
+    });
+    const previousQuantity = existingLevel?.quantity ?? 0;
+
     const level = await prisma.stockLevel.upsert({
       where: {
         organizationId_warehouseId_productId: {
@@ -365,8 +371,105 @@ export class WarehousesService {
       productName: product.name,
     });
 
+    // If stock increased, enqueue the auto-consolidation background job (Phase 17)
+    if (quantity > previousQuantity) {
+      const quantityAdded = quantity - previousQuantity;
+      await backorderConsolidationQueue.add(
+        `stock-arrival:${orgId}:${productId}:${Date.now()}`,
+        {
+          orgId,
+          warehouseId,
+          productId,
+          quantityAdded,
+          timestamp: new Date().toISOString(),
+        }
+      );
+      logger.info(
+        { orgId, warehouseId, productId, quantityAdded, newTotal: quantity },
+        'Stock increased via setStock -> auto-consolidation job enqueued'
+      );
+    }
+
     logger.info({ orgId, warehouseId, productId, quantity }, 'Stock adjusted');
     return level;
+  }
+
+  async recordStockArrival(
+    orgId: string,
+    warehouseId: string,
+    productId: string,
+    quantityAdded: number
+  ) {
+    if (!Number.isInteger(quantityAdded) || quantityAdded <= 0) {
+      throw new HttpError(400, 'Arrival quantity must be a positive whole number');
+    }
+
+    const warehouse = await prisma.warehouse.findFirst({
+      where: { id: warehouseId, organizationId: orgId },
+    });
+    if (!warehouse) {
+      throw new HttpError(404, 'Warehouse not found in this organization');
+    }
+
+    const product = await prisma.product.findFirst({
+      where: { id: productId, organizationId: orgId },
+    });
+    if (!product) {
+      throw new HttpError(404, 'Product not found in this organization');
+    }
+
+    const existingLevel = await prisma.stockLevel.findFirst({
+      where: { organizationId: orgId, warehouseId, productId },
+    });
+    const currentQty = existingLevel?.quantity ?? 0;
+    const newQuantity = currentQty + quantityAdded;
+
+    const level = await prisma.stockLevel.upsert({
+      where: {
+        organizationId_warehouseId_productId: {
+          organizationId: orgId,
+          warehouseId,
+          productId,
+        },
+      },
+      create: {
+        organizationId: orgId,
+        warehouseId,
+        productId,
+        quantity: newQuantity,
+      },
+      update: { quantity: newQuantity },
+    });
+
+    await this.invalidateStockCache(orgId);
+    emitToOrg(orgId, 'inventory:updated', {
+      warehouseId,
+      productId,
+      quantity: newQuantity,
+      warehouseName: warehouse.name,
+      productName: product.name,
+      quantityAdded,
+      type: 'stock_arrival',
+    });
+
+    // Enqueue BullMQ job for auto-consolidation analysis
+    await backorderConsolidationQueue.add(
+      `stock-arrival:${orgId}:${productId}:${Date.now()}`,
+      {
+        orgId,
+        warehouseId,
+        productId,
+        quantityAdded,
+        timestamp: new Date().toISOString(),
+      }
+    );
+
+    logger.info(
+      { orgId, warehouseId, productId, quantityAdded, newTotal: newQuantity },
+      'Stock arrival recorded & auto-consolidation job enqueued'
+    );
+
+    return { level, newQuantity, quantityAdded };
   }
 }
 

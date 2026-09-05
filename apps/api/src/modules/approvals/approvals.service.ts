@@ -61,7 +61,8 @@ export class ApprovalsService {
         | 'customer_confirmed'
         | 'reentered_approval'
         | 'deal_reopened'
-        | 'fulfillment_accepted';
+        | 'fulfillment_accepted'
+        | 'backorder_consolidated';
       reason?: string | null;
       metadata?: any;
     }
