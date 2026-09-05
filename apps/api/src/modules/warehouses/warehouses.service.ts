@@ -35,7 +35,10 @@ export interface StockMatrixRow {
   productName: string;
   sku: string;
   quantities: Record<string, number>;
+  /** Worth (qty × unit value) per warehouse id. */
+  worth: Record<string, number>;
   total: number;
+  totalWorth: number;
 }
 
 export interface StockMatrix {
@@ -48,9 +51,11 @@ export interface StockMatrix {
     isDefault: boolean;
     status: string;
     columnTotal: number;
+    columnWorth: number;
   }>;
   rows: StockMatrixRow[];
   grandTotal: number;
+  grandTotalWorth: number;
 }
 
 export class WarehousesService {
@@ -245,6 +250,119 @@ export class WarehousesService {
     return config;
   }
 
+  // ==================== SHIPPING RULE OVERRIDES (customer / warehouse) ====================
+
+  /**
+   * Resolve the effective shipping rules. Priority:
+   *   1. Customer-specific override (if customerId provided and a row exists)
+   *   2. Warehouse-specific override (if warehouseId provided and a row exists)
+   *   3. Org-level default config
+   *
+   * For split-warehouse shipping, callers resolve rules per warehouse so each
+   * shipment leg follows the right policy.
+   */
+  async resolveShippingRules(
+    orgId: string,
+    scope?: { customerId?: string | null; warehouseId?: string | null }
+  ) {
+    if (scope?.customerId) {
+      const customerOverride = await prisma.shippingRuleOverride.findFirst({
+        where: { organizationId: orgId, customerId: scope.customerId },
+      });
+      if (customerOverride) return customerOverride;
+    }
+    if (scope?.warehouseId) {
+      const warehouseOverride = await prisma.shippingRuleOverride.findFirst({
+        where: { organizationId: orgId, warehouseId: scope.warehouseId },
+      });
+      if (warehouseOverride) return warehouseOverride;
+    }
+    return this.getShippingRules(orgId);
+  }
+
+  async getShippingRuleOverrides(orgId: string) {
+    const [overrides, customers, warehouses] = await Promise.all([
+      prisma.shippingRuleOverride.findMany({
+        where: { organizationId: orgId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.customer.findMany({
+        where: { organizationId: orgId },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.warehouse.findMany({
+        where: { organizationId: orgId },
+        select: { id: true, name: true, code: true },
+        orderBy: { name: 'asc' },
+      }),
+    ]);
+    return { overrides, customers, warehouses };
+  }
+
+  async upsertShippingRuleOverride(
+    orgId: string,
+    input: UpdateShippingRulesInput & { customerId?: string | null; warehouseId?: string | null }
+  ) {
+    if (
+      input.deliveryExtensionDays !== undefined &&
+      (input.deliveryExtensionDays < 0 || input.deliveryExtensionDays > 60)
+    ) {
+      throw new HttpError(400, 'Delivery extension must be between 0 and 60 days');
+    }
+
+    const customerId = input.customerId?.trim() || null;
+    const warehouseId = input.warehouseId?.trim() || null;
+
+    if (!customerId && !warehouseId) {
+      throw new HttpError(400, 'An override must target a customer or a warehouse');
+    }
+    if (customerId) {
+      const customer = await prisma.customer.findFirst({
+        where: { id: customerId, organizationId: orgId },
+      });
+      if (!customer) throw new HttpError(404, 'Customer not found in this organization');
+    }
+    if (warehouseId) {
+      const warehouse = await prisma.warehouse.findFirst({
+        where: { id: warehouseId, organizationId: orgId },
+      });
+      if (!warehouse) throw new HttpError(404, 'Warehouse not found in this organization');
+    }
+
+    const existing = await prisma.shippingRuleOverride.findFirst({
+      where: { organizationId: orgId, customerId, warehouseId },
+    });
+
+    const data = {
+      allowSplitShipments: input.allowSplitShipments ?? true,
+      chargeForSplitShipments: input.chargeForSplitShipments ?? false,
+      deliveryExtensionDays: input.deliveryExtensionDays ?? 3,
+      notes: input.notes?.trim() || null,
+    };
+
+    const override = existing
+      ? await prisma.shippingRuleOverride.update({ where: { id: existing.id }, data })
+      : await prisma.shippingRuleOverride.create({
+          data: { organizationId: orgId, customerId, warehouseId, ...data },
+        });
+
+    logger.info({ orgId, customerId, warehouseId }, 'Shipping rule override saved');
+    return override;
+  }
+
+  async deleteShippingRuleOverride(orgId: string, overrideId: string) {
+    const existing = await prisma.shippingRuleOverride.findFirst({
+      where: { id: overrideId, organizationId: orgId },
+    });
+    if (!existing) {
+      throw new HttpError(404, 'Shipping rule override not found');
+    }
+    await prisma.shippingRuleOverride.delete({ where: { id: overrideId } });
+    logger.info({ orgId, overrideId }, 'Shipping rule override deleted');
+    return { success: true };
+  }
+
   // ==================== STOCK (Redis-cached matrix) ====================
 
   async getStockMatrix(orgId: string): Promise<StockMatrix> {
@@ -289,6 +407,7 @@ export class WarehousesService {
         isDefault: w.isDefault,
         status: w.status,
         columnTotal: 0,
+        columnWorth: 0,
       })),
       rows: products.map((p) => ({
         productId: p.id,
@@ -297,18 +416,34 @@ export class WarehousesService {
         quantities: Object.fromEntries(
           warehouses.map((w) => [w.id, quantityMap.get(`${w.id}:${p.id}`) ?? 0])
         ),
+        worth: {},
         total: 0,
+        totalWorth: 0,
       })),
       grandTotal: 0,
+      grandTotalWorth: 0,
     };
 
     for (const row of matrix.rows) {
+      const product = products.find((p) => p.id === row.productId);
+      // Use cost price when known (inventory worth); fall back to list price.
+      const unitValue = product ? Number(product.costPrice ?? product.price) : 0;
       for (const w of matrix.warehouses) {
-        row.total += row.quantities[w.id] ?? 0;
-        w.columnTotal += row.quantities[w.id] ?? 0;
+        const qty = row.quantities[w.id] ?? 0;
+        const worth = this.round2(qty * unitValue);
+        row.worth[w.id] = worth;
+        row.total += qty;
+        row.totalWorth += worth;
+        w.columnTotal += qty;
+        w.columnWorth += worth;
       }
       matrix.grandTotal += row.total;
+      matrix.grandTotalWorth += row.totalWorth;
     }
+    for (const w of matrix.warehouses) {
+      w.columnWorth = this.round2(w.columnWorth);
+    }
+    matrix.grandTotalWorth = this.round2(matrix.grandTotalWorth);
 
     try {
       await redis.set(cacheKey, JSON.stringify(matrix), 'EX', 300);

@@ -37,6 +37,7 @@ export interface CreateProductInput {
   costPrice?: number | null;
   billingFrequency?: 'one_time' | 'monthly' | 'quarterly' | 'annual';
   status?: 'active' | 'archived';
+  maxDiscountPercent?: number | null;
   tierPrices?: Array<{ tierId: string; customPrice: number }>;
 }
 
@@ -49,6 +50,7 @@ export interface UpdateProductInput {
   costPrice?: number | null;
   billingFrequency?: 'one_time' | 'monthly' | 'quarterly' | 'annual';
   status?: 'active' | 'archived';
+  maxDiscountPercent?: number | null;
   tierPrices?: Array<{ tierId: string; customPrice: number }>;
 }
 
@@ -472,6 +474,10 @@ export class CatalogService {
               : null,
           billingFrequency: data.billingFrequency || 'one_time',
           status: data.status || 'active',
+          maxDiscountPercent:
+            data.maxDiscountPercent !== undefined && data.maxDiscountPercent !== null
+              ? new Prisma.Decimal(data.maxDiscountPercent)
+              : null,
         },
       });
 
@@ -546,6 +552,10 @@ export class CatalogService {
           }),
           ...(data.billingFrequency && { billingFrequency: data.billingFrequency }),
           ...(data.status && { status: data.status }),
+          ...(data.maxDiscountPercent !== undefined && {
+            maxDiscountPercent:
+              data.maxDiscountPercent !== null ? new Prisma.Decimal(data.maxDiscountPercent) : null,
+          }),
         },
       });
 
@@ -616,145 +626,6 @@ export class CatalogService {
     return { success: true, message: 'Product deleted' };
   }
 
-  // ================= PRICE LIST MATRIX =================
-
-  async getPriceListMatrix(orgId: string) {
-    await this.ensureDefaultCatalog(orgId);
-
-    const [tiers, products, priceListItems] = await Promise.all([
-      prisma.customerTier.findMany({
-        where: { organizationId: orgId },
-        orderBy: [{ createdAt: 'asc' }, { name: 'asc' }],
-      }),
-      prisma.product.findMany({
-        where: { organizationId: orgId, status: 'active' },
-        include: { category: true },
-        orderBy: { name: 'asc' },
-      }),
-      prisma.priceListItem.findMany({
-        where: { organizationId: orgId },
-      }),
-    ]);
-
-    // Build matrix: map[productId][tierId] = customPrice
-    const itemMap = new Map<string, Prisma.Decimal>();
-    for (const item of priceListItems) {
-      itemMap.set(`${item.productId}:${item.tierId}`, item.customPrice);
-    }
-
-    const matrix = products.map((p) => {
-      const basePrice = Number(p.price);
-      const tierPrices: Record<
-        string,
-        {
-          customPrice: number | null;
-          effectivePrice: number;
-          isCustom: boolean;
-        }
-      > = {};
-
-      for (const t of tiers) {
-        const key = `${p.id}:${t.id}`;
-        const custom = itemMap.get(key);
-        if (custom !== undefined) {
-          tierPrices[t.id] = {
-            customPrice: Number(custom),
-            effectivePrice: Number(custom),
-            isCustom: true,
-          };
-        } else {
-          // Calculate default tier discount if applicable
-          const discountPct = Number(t.defaultDiscountPercent || 0);
-          const computed = basePrice * (1 - discountPct / 100);
-          tierPrices[t.id] = {
-            customPrice: null,
-            effectivePrice: Math.round(computed * 100) / 100,
-            isCustom: false,
-          };
-        }
-      }
-
-      return {
-        product: {
-          id: p.id,
-          name: p.name,
-          sku: p.sku,
-          price: basePrice,
-          costPrice: p.costPrice ? Number(p.costPrice) : null,
-          billingFrequency: p.billingFrequency,
-          category: p.category ? { id: p.category.id, name: p.category.name } : null,
-        },
-        tierPrices,
-      };
-    });
-
-    return { tiers, matrix };
-  }
-
-  async batchUpdatePriceListMatrix(orgId: string, items: PriceMatrixItemInput[]) {
-    if (!items || items.length === 0) {
-      return { count: 0 };
-    }
-
-    // Verify all tiers and products belong to this tenant
-    const productIds = Array.from(new Set(items.map((i) => i.productId)));
-    const tierIds = Array.from(new Set(items.map((i) => i.tierId)));
-
-    const [validProducts, validTiers] = await Promise.all([
-      prisma.product.findMany({
-        where: { id: { in: productIds }, organizationId: orgId },
-        select: { id: true },
-      }),
-      prisma.customerTier.findMany({
-        where: { id: { in: tierIds }, organizationId: orgId },
-        select: { id: true },
-      }),
-    ]);
-
-    const validProductSet = new Set(validProducts.map((p) => p.id));
-    const validTierSet = new Set(validTiers.map((t) => t.id));
-
-    const sanitizedItems = items.filter(
-      (item) => validProductSet.has(item.productId) && validTierSet.has(item.tierId)
-    );
-
-    return prisma.$transaction(async (tx) => {
-      let count = 0;
-      for (const item of sanitizedItems) {
-        if (item.customPrice <= 0 || isNaN(item.customPrice)) {
-          // If 0 or negative/cleared, delete custom override
-          await tx.priceListItem.deleteMany({
-            where: {
-              organizationId: orgId,
-              productId: item.productId,
-              tierId: item.tierId,
-            },
-          });
-        } else {
-          await tx.priceListItem.upsert({
-            where: {
-              organizationId_tierId_productId: {
-                organizationId: orgId,
-                productId: item.productId,
-                tierId: item.tierId,
-              },
-            },
-            create: {
-              organizationId: orgId,
-              productId: item.productId,
-              tierId: item.tierId,
-              customPrice: new Prisma.Decimal(item.customPrice),
-            },
-            update: {
-              customPrice: new Prisma.Decimal(item.customPrice),
-            },
-          });
-        }
-        count++;
-      }
-      return { count };
-    });
-  }
 }
 
 export const catalogService = new CatalogService();

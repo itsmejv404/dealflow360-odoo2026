@@ -1,8 +1,10 @@
-﻿import { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { HttpError } from '../../shared/errors.js';
 import { pricingService } from './pricing.service.js';
 import { approvalsService } from '../approvals/approvals.service.js';
+import { emitToOrg } from '../../lib/socket.js';
+import { billingService } from '../billing/billing.service.js';
 
 export interface CreateCustomerInput {
   tierId: string;
@@ -545,6 +547,56 @@ export class QuotationsService {
     });
 
     return { success: true };
+  }
+
+  async confirmQuotation(orgId: string, quotationId: string, actor?: AuditActor) {
+    const existing = await prisma.quotation.findFirst({
+      where: { id: quotationId, organizationId: orgId },
+      include: { customer: true },
+    });
+
+    if (!existing) {
+      throw new HttpError(404, 'Quotation not found');
+    }
+
+    const confirmableStatuses = new Set(['approved', 'sent', 'negotiating']);
+    if (!confirmableStatuses.has(existing.status)) {
+      throw new HttpError(
+        400,
+        `Quotation in '${existing.status}' status cannot be confirmed. Only approved/sent quotations can be confirmed.`
+      );
+    }
+
+    const updated = await prisma.quotation.update({
+      where: { id: quotationId },
+      data: { status: 'confirmed' },
+    });
+
+    await approvalsService.logAudit(orgId, {
+      entityType: 'quotation',
+      entityId: quotationId,
+      user:
+        actor && actor.userId && actor.email && actor.role
+          ? { userId: actor.userId, email: actor.email, role: actor.role }
+          : null,
+      action: 'order_confirmed',
+      reason: `Quotation ${existing.quotationNumber} confirmed by internal user`,
+      metadata: {
+        quotationNumber: existing.quotationNumber,
+        previousStatus: existing.status,
+      },
+    });
+
+    emitToOrg(orgId, 'quote:status_changed', {
+      quotationId,
+      status: 'confirmed',
+      quotationNumber: existing.quotationNumber,
+    });
+
+    // Trigger order split into one-time invoice and recurring subscriptions
+    await billingService.confirmAndSplitOrder(orgId, quotationId);
+
+    return updated;
   }
 }
 

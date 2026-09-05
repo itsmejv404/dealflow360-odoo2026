@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { portalController } from './portal.controller.js';
 import { tenantContextMiddleware, requireRoles } from '../../shared/tenant.middleware.js';
 import { tenantRateLimit } from '../../shared/rate-limit.js';
+import { filesController } from '../files/files.controller.js';
 
 export const portalRouter = Router();
 
@@ -50,6 +51,11 @@ portalRouter.get('/quotation', (req, res, next) =>
 
 portalRouter.get('/quotation/:id', (req, res, next) =>
   portalController.getQuotation(req, res, next)
+);
+
+// Phase 22: customer downloads the org-branded quotation PDF (scoped to own quotes)
+portalRouter.get('/quotation/:id/pdf', (req, res, next) =>
+  filesController.quotationPdf(req, res, next)
 );
 
 // ---- Phase 14: negotiation & re-approval loop (customer-scoped writes) ----

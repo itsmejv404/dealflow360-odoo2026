@@ -276,7 +276,7 @@ onMounted(() => {
               <FileText class="w-6 h-6 text-primary" />
               Quotations & Deals
             </h1>
-            <Badge variant="outline" class="text-xs">Stage 2 Builder</Badge>
+            <Badge variant="outline" class="text-xs">Builder</Badge>
           </div>
           <p class="text-sm text-muted-foreground mt-1">
             Build, discount, and manage your organization's quotations.
@@ -319,7 +319,7 @@ onMounted(() => {
           </CardHeader>
           <CardContent>
             <p class="text-xs text-muted-foreground">
-              {{ draftCount }} active in draft stage
+              {{ draftCount }} active in draft
             </p>
           </CardContent>
         </Card>

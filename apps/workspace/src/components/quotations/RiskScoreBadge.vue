@@ -36,9 +36,11 @@ const props = withDefaults(defineProps<RiskProps>(), {
   lines: () => [],
 });
 
-const isLow = computed(() => props.riskLevel === 'low' || props.riskScore <= 15);
-const isMedium = computed(() => props.riskLevel === 'medium' && props.riskScore > 15);
-const isHigh = computed(() => props.riskLevel === 'high' || props.approvalRouting === 'manager_finance');
+// Level and color always derive from riskLevel alone, so a compliant quote can
+// never render high-risk styling regardless of the raw score value.
+const isHigh = computed(() => props.riskLevel === 'high');
+const isMedium = computed(() => props.riskLevel === 'medium');
+const isLow = computed(() => !isHigh.value && !isMedium.value);
 
 const routingBadgeText = computed(() => {
   if (props.approvalRouting === 'manager_finance') return 'Manager + Finance Required';

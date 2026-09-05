@@ -7,6 +7,7 @@ import { approvalsService, type UserContext } from '../approvals/approvals.servi
 import { approvalNotificationQueue } from '../../lib/queue.js';
 import { emitToOrg, emitToQuote } from '../../lib/socket.js';
 import { logger } from '../../lib/logger.js';
+import { billingService } from '../billing/billing.service.js';
 
 export interface CustomerActor {
   name: string;
@@ -813,6 +814,13 @@ export class NegotiationService {
         where: { id: quotationId },
         data: { status: 'confirmed' },
       });
+
+      // Phase 18: Split order into one-time invoice and recurring subscriptions
+      try {
+        await billingService.confirmAndSplitOrder(orgId, quotationId);
+      } catch (err: any) {
+        logger.error({ orgId, quotationId, err: err.message }, 'Failed to split billing for confirmed order');
+      }
 
       await this.audit(orgId, quotationId, 'customer_confirmed', null, 'Customer confirmed the quotation terms from the portal', {
         confirmedBy: customerActor.email,

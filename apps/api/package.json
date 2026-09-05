@@ -19,7 +19,13 @@
     "test:negotiation": "tsx src/modules/negotiation/negotiation.test-isolation.ts",
     "test:warehouses": "tsx src/modules/warehouses/warehouses.test-isolation.ts",
     "test:fulfillment": "tsx src/modules/fulfillment/fulfillment.test-isolation.ts",
-    "test:backorders": "tsx src/modules/fulfillment/fulfillment-backorders.test-isolation.ts"
+    "test:backorders": "tsx src/modules/fulfillment/fulfillment-backorders.test-isolation.ts",
+    "test:billing": "tsx src/modules/billing/billing-engine.test-isolation.ts",
+    "test:proration": "tsx src/modules/billing/proration-credit-notes.test-isolation.ts",
+    "test:payments": "tsx src/modules/billing/payments-dlq.test-isolation.ts",
+    "test:dealhealth": "tsx src/modules/dealhealth/dealhealth.test-isolation.ts",
+    "test:files": "tsx src/modules/files/files.test-isolation.ts",
+    "test:e2e": "tsx src/scripts/verify-phase24.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

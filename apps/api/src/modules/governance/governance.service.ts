@@ -116,7 +116,13 @@ export class GovernanceService {
         lineDiscPct + orderDiscPct - (lineDiscPct * orderDiscPct) / 100
       );
 
-      const categoryCeilingPercent = catId && ceilingMap.has(catId) ? ceilingMap.get(catId)! : 0;
+      const productCeiling =
+        prod?.maxDiscountPercent !== null && prod?.maxDiscountPercent !== undefined
+          ? Number(prod.maxDiscountPercent)
+          : null;
+      const categoryCeilingPercent =
+        productCeiling ??
+        (catId && ceilingMap.has(catId) ? ceilingMap.get(catId)! : Number(tier.defaultDiscountPercent || 0));
 
       const riskDelta = this.round2(effectiveDiscountPercent - categoryCeilingPercent);
       const riskDeltaPercent = Math.max(0, riskDelta);

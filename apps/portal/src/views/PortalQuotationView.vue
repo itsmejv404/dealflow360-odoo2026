@@ -5,6 +5,10 @@ import { customerAuth } from '@/lib/auth';
 import { portalApiRequest } from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import brandLogo from '@/assets/dataflow-logo.png';
+import { getPortalSocket } from '@/lib/socket';
+import { useTheme } from '@/lib/theme';
+
+const { preference: themePreference, toggleTheme } = useTheme();
 import {
   Calendar,
   CheckCircle2,
@@ -20,6 +24,8 @@ import {
   ArrowLeftRight,
   FileEdit,
   Hourglass,
+  Sun,
+  Moon,
 } from 'lucide-vue-next';
 
 // Customers only see the issuing org's identity (name + logo) — internal
@@ -538,6 +544,32 @@ function requestStatusBadge(status: string) {
 onMounted(() => {
   loadPortalData();
 });
+
+// Live negotiation updates: when the sales team replies, refetch the thread so
+// org→customer messages arrive in real time (customer sockets are scoped to
+// this quotation's room by the server).
+let portalSocketBound = false;
+onMounted(() => {
+  try {
+    if (!customerAuth.state.token) return;
+    const socket = getPortalSocket();
+    if (!portalSocketBound) {
+      socket.on('connect', () => {
+        if (currentQuoteId.value) {
+          socket.emit('quote:join', currentQuoteId.value);
+        }
+      });
+      socket.on('negotiation:updated', (data: any) => {
+        if (!data || !data.quotationId || data.quotationId === currentQuoteId.value) {
+          loadNegotiation();
+        }
+      });
+      portalSocketBound = true;
+    }
+  } catch (err) {
+    console.warn('Portal socket setup failed:', err);
+  }
+});
 </script>
 
 <template>
@@ -564,6 +596,14 @@ onMounted(() => {
         </div>
 
         <div class="flex items-center gap-2">
+          <button
+            @click="toggleTheme"
+            :title="themePreference === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-border bg-background text-foreground hover:bg-muted transition-colors shadow-2xs"
+          >
+            <Sun v-if="themePreference === 'dark'" class="w-4 h-4" />
+            <Moon v-else class="w-4 h-4" />
+          </button>
           <button
             @click="handlePrint"
             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors shadow-2xs"

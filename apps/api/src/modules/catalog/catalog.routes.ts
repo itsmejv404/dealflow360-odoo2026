@@ -51,11 +51,3 @@ catalogRouter.put('/products/:id', requireRoles(['org_admin']), (req, res, next)
 catalogRouter.delete('/products/:id', requireRoles(['org_admin']), (req, res, next) => {
   catalogController.deleteProduct(req, res).catch(next);
 });
-
-// Price Lists Matrix
-catalogRouter.get('/pricelists', (req, res, next) => {
-  catalogController.getPriceListMatrix(req, res).catch(next);
-});
-catalogRouter.put('/pricelists/matrix', requireRoles(['org_admin']), (req, res, next) => {
-  catalogController.batchUpdatePriceListMatrix(req, res).catch(next);
-});

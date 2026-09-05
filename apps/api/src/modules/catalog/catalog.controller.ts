@@ -39,6 +39,7 @@ const createProductSchema = z.object({
   costPrice: z.number().min(0).nullable().optional(),
   billingFrequency: z.enum(['one_time', 'monthly', 'quarterly', 'annual']).optional(),
   status: z.enum(['active', 'archived']).optional(),
+  maxDiscountPercent: z.number().min(0).max(100).nullable().optional(),
   tierPrices: z
     .array(
       z.object({
@@ -58,6 +59,7 @@ const updateProductSchema = z.object({
   costPrice: z.number().min(0).nullable().optional(),
   billingFrequency: z.enum(['one_time', 'monthly', 'quarterly', 'annual']).optional(),
   status: z.enum(['active', 'archived']).optional(),
+  maxDiscountPercent: z.number().min(0).max(100).nullable().optional(),
   tierPrices: z
     .array(
       z.object({
@@ -66,16 +68,6 @@ const updateProductSchema = z.object({
       })
     )
     .optional(),
-});
-
-const batchPriceMatrixSchema = z.object({
-  items: z.array(
-    z.object({
-      tierId: z.string().uuid(),
-      productId: z.string().uuid(),
-      customPrice: z.number().min(0),
-    })
-  ),
 });
 
 export class CatalogController {
@@ -192,21 +184,6 @@ export class CatalogController {
     const orgId = req.tenant!.orgId;
     const id = req.params.id as string;
     const result = await catalogService.deleteProduct(orgId, id);
-    res.json(result);
-  }
-
-  // ================= PRICE LISTS =================
-
-  async getPriceListMatrix(req: Request, res: Response): Promise<void> {
-    const orgId = req.tenant!.orgId;
-    const data = await catalogService.getPriceListMatrix(orgId);
-    res.json(data);
-  }
-
-  async batchUpdatePriceListMatrix(req: Request, res: Response): Promise<void> {
-    const orgId = req.tenant!.orgId;
-    const validated = this.parseBody(batchPriceMatrixSchema, req.body);
-    const result = await catalogService.batchUpdatePriceListMatrix(orgId, validated.items);
     res.json(result);
   }
 }

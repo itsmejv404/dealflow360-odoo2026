@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { quotationsController } from './quotations.controller.js';
 import { tenantContextMiddleware, requireRoles } from '../../shared/tenant.middleware.js';
 
@@ -40,3 +40,8 @@ quotationsRouter.put('/:id', (req, res, next) => {
 quotationsRouter.delete('/:id', (req, res, next) => {
   quotationsController.deleteQuotation(req, res).catch(next);
 });
+
+quotationsRouter.post('/:id/confirm', (req, res, next) => {
+  quotationsController.confirmQuotation(req, res).catch(next);
+});
+

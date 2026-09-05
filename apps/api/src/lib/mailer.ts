@@ -414,3 +414,126 @@ export async function sendQuoteConfirmedEmail({
 }
 
 
+
+export interface SendPasswordResetEmailOptions {
+  to: string;
+  name?: string | null;
+  resetToken: string;
+  resetUrl: string;
+  audience?: 'internal' | 'customer';
+}
+
+export async function sendPasswordResetEmail({
+  to,
+  name,
+  resetToken,
+  resetUrl,
+  audience = 'internal',
+}: SendPasswordResetEmailOptions): Promise<SentMessageInfo> {
+  const mailOptions = {
+    from: '"DealFlow360" <no-reply@dealflow360.com>',
+    to,
+    subject: 'Reset your password',
+    text: `Hello ${name || 'there'},
+
+We received a request to reset your password.
+
+Use the link below to choose a new password (valid for 1 hour):
+${resetUrl}
+
+Reset Token: ${resetToken}
+
+If you did not request this, you can safely ignore this email.`,
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 28px; background-color: #ffffff;">
+        <h2 style="color: #0f172a; margin-top: 0;">Password Reset Requested</h2>
+        <p>Hello <strong>${name || 'there'}</strong>,</p>
+        <p>We received a request to reset the password for your ${audience === 'customer' ? 'customer portal' : 'DealFlow360'} account.</p>
+        <div style="margin: 24px 0; text-align: center;">
+          <a href="${resetUrl}" style="background-color: #2563eb; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">
+            Choose a New Password
+          </a>
+        </div>
+        <p style="color: #64748b; font-size: 13px;">This link expires in 1 hour. If you did not request a reset, you can safely ignore this email — your password will not change.</p>
+      </div>
+    `,
+  };
+
+  const info = await transporter.sendMail(mailOptions);
+  logger.info({ messageId: info.messageId, to, audience }, 'Dispatched password reset email');
+  return info;
+}
+
+export interface SendInvoiceEmailOptions {
+  to: string;
+  customerName: string;
+  orgName: string;
+  invoiceNumber: string;
+  totalAmount: number;
+  currency: string;
+  dueDate: string;
+  invoicePdf: Buffer;
+  invoiceUrl?: string;
+}
+
+export async function sendInvoiceEmail({
+  to,
+  customerName,
+  orgName,
+  invoiceNumber,
+  totalAmount,
+  currency,
+  dueDate,
+  invoicePdf,
+  invoiceUrl,
+}: SendInvoiceEmailOptions): Promise<SentMessageInfo> {
+  const formattedTotal = `${currency} ${totalAmount.toFixed(2)}`;
+  const mailOptions = {
+    from: `"${orgName}" <no-reply@dealflow360.com>`,
+    to,
+    subject: `Invoice ${invoiceNumber} from ${orgName}`,
+    text: `Hello ${customerName},
+
+Please find attached invoice ${invoiceNumber}.
+
+Total: ${formattedTotal}
+Due Date: ${dueDate}
+
+Best regards,
+${orgName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 28px; background-color: #ffffff;">
+        <h2 style="color: #0f172a; margin-top: 0;">Invoice ${invoiceNumber}</h2>
+        <p>Dear <strong>${customerName}</strong>,</p>
+        <p>Your invoice from <strong>${orgName}</strong> is attached to this email as a PDF.</p>
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="color: #64748b; font-size: 13px;">Invoice Number:</span>
+            <strong style="color: #0f172a; font-family: monospace;">${invoiceNumber}</strong>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="color: #64748b; font-size: 13px;">Total Amount:</span>
+            <strong style="color: #059669; font-size: 16px;">${formattedTotal}</strong>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: #64748b; font-size: 13px;">Due Date:</span>
+            <strong style="color: #0f172a;">${dueDate}</strong>
+          </div>
+        </div>
+        ${invoiceUrl ? `<p style="text-align: center; margin: 24px 0;"><a href="${invoiceUrl}" style="background-color: #059669; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">View Invoice Online</a></p>` : ''}
+        <p style="color: #64748b; font-size: 13px;">Thank you for your business.</p>
+      </div>
+    `,
+    attachments: [
+      {
+        filename: `${invoiceNumber}.pdf`,
+        content: invoicePdf,
+        contentType: 'application/pdf',
+      },
+    ],
+  };
+
+  const info = await transporter.sendMail(mailOptions);
+  logger.info({ messageId: info.messageId, to, orgName, invoiceNumber }, 'Dispatched invoice email with PDF attachment');
+  return info;
+}

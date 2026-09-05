@@ -159,7 +159,7 @@ onUnmounted(() => {
             :class="{ '!bg-background !text-foreground shadow-xs font-semibold': currentTab === 'manager' }"
             @click="currentTab = 'manager'"
           >
-            Manager Stage ({{ pendingRequests.filter((r) => r.stage === 'manager').length }})
+            Manager ({{ pendingRequests.filter((r) => r.stage === 'manager').length }})
           </Button>
           <Button
             size="sm"
@@ -168,7 +168,7 @@ onUnmounted(() => {
             :class="{ '!bg-background !text-foreground shadow-xs font-semibold': currentTab === 'finance' }"
             @click="currentTab = 'finance'"
           >
-            Finance Stage ({{ pendingRequests.filter((r) => r.stage === 'finance').length }})
+            Finance ({{ pendingRequests.filter((r) => r.stage === 'finance').length }})
           </Button>
         </div>
       </div>

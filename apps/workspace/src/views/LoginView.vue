@@ -103,6 +103,12 @@ async function onSubmit(): Promise<void> {
               <LogIn class="w-4 h-4 mr-2" />
               {{ isLoading ? 'Authenticating...' : 'Sign in to Workspace' }}
             </Button>
+            <router-link
+              to="/forgot-password"
+              class="text-xs text-muted-foreground hover:text-foreground transition-colors text-center"
+            >
+              Forgot your password?
+            </router-link>
           </form>
         </CardContent>
       </Card>

@@ -62,7 +62,15 @@ export class ApprovalsService {
         | 'reentered_approval'
         | 'deal_reopened'
         | 'fulfillment_accepted'
-        | 'backorder_consolidated';
+        | 'backorder_consolidated'
+        | 'order_confirmed'
+        | 'invoice_issued'
+        | 'billing_schedule_generated'
+        | 'subscription_created'
+        | 'subscription_prorated'
+        | 'credit_note_issued'
+        | 'payment_recorded'
+        | 'refund_processed';
       reason?: string | null;
       metadata?: any;
     }

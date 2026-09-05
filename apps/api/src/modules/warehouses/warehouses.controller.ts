@@ -28,6 +28,11 @@ const shippingRulesSchema = z.object({
   notes: z.string().max(1000).nullable().optional(),
 });
 
+const shippingOverrideSchema = shippingRulesSchema.extend({
+  customerId: z.string().uuid().nullable().optional(),
+  warehouseId: z.string().uuid().nullable().optional(),
+});
+
 const setStockSchema = z.object({
   quantity: z.number().int('Stock quantity must be a whole number').min(0, 'Stock cannot be negative'),
 });
@@ -108,6 +113,52 @@ export class WarehousesController {
       const orgId = req.tenant!.orgId;
       const data = this.parseBody(shippingRulesSchema, req.body);
       const rules = await warehousesService.updateShippingRules(orgId, data);
+      res.json({ rules });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async listShippingRuleOverrides(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = req.tenant!.orgId;
+      const data = await warehousesService.getShippingRuleOverrides(orgId);
+      res.json(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async upsertShippingRuleOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = req.tenant!.orgId;
+      const data = this.parseBody(shippingOverrideSchema, req.body);
+      const override = await warehousesService.upsertShippingRuleOverride(orgId, data);
+      res.status(201).json({ override });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async deleteShippingRuleOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = req.tenant!.orgId;
+      const id = req.params.id as string;
+      if (!id) throw new HttpError(400, 'Override ID is required');
+      const result = await warehousesService.deleteShippingRuleOverride(orgId, id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async resolveShippingRules(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = req.tenant!.orgId;
+      const rules = await warehousesService.resolveShippingRules(orgId, {
+        customerId: (req.query.customerId as string) || null,
+        warehouseId: (req.query.warehouseId as string) || null,
+      });
       res.json({ rules });
     } catch (err) {
       next(err);

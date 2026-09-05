@@ -12,6 +12,9 @@ export const bullRedisConnection = {
 
 export const APPROVAL_NOTIFICATION_QUEUE = 'org_approval_notifications';
 export const BACKORDER_CONSOLIDATION_QUEUE = 'org_backorder_consolidation';
+export const BILLING_SCHEDULE_QUEUE = 'org_billing_schedules';
+export const PRORATION_QUEUE = 'org_proration_runs';
+export const DEAL_HEALTH_SCAN_QUEUE = 'org_deal_health_scans';
 
 export interface ApprovalNotificationJobPayload {
   orgId: string;
@@ -46,6 +49,26 @@ export interface BackorderConsolidationJobPayload {
   timestamp: string;
 }
 
+export interface BillingScheduleJobPayload {
+  orgId: string;
+  quotationId: string;
+  subscriptionId?: string;
+}
+
+export interface ProrationJobPayload {
+  orgId: string;
+  subscriptionId: string;
+  newQuantity: number;
+  effectiveDate?: string;
+  reason?: string;
+  requestedBy?: { userId?: string; email?: string; role?: string };
+}
+
+export interface DealHealthScanJobPayload {
+  orgId: string;
+  trigger?: 'scheduled' | 'manual';
+}
+
 export const approvalNotificationQueue = new Queue<ApprovalNotificationJobPayload>(
   APPROVAL_NOTIFICATION_QUEUE,
   {
@@ -64,6 +87,54 @@ export const approvalNotificationQueue = new Queue<ApprovalNotificationJobPayloa
 
 export const backorderConsolidationQueue = new Queue<BackorderConsolidationJobPayload>(
   BACKORDER_CONSOLIDATION_QUEUE,
+  {
+    connection: bullRedisConnection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: 100,
+      removeOnFail: 500,
+    },
+  }
+);
+
+export const billingScheduleQueue = new Queue<BillingScheduleJobPayload>(
+  BILLING_SCHEDULE_QUEUE,
+  {
+    connection: bullRedisConnection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: 100,
+      removeOnFail: 500,
+    },
+  }
+);
+
+export const prorationQueue = new Queue<ProrationJobPayload>(
+  PRORATION_QUEUE,
+  {
+    connection: bullRedisConnection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: 100,
+      removeOnFail: 500,
+    },
+  }
+);
+
+export const dealHealthScanQueue = new Queue<DealHealthScanJobPayload>(
+  DEAL_HEALTH_SCAN_QUEUE,
   {
     connection: bullRedisConnection,
     defaultJobOptions: {
@@ -154,6 +225,21 @@ export async function getQueueHealthStatus(): Promise<QueueHealthReport> {
       name: APPROVAL_NOTIFICATION_QUEUE,
       displayName: 'Approval Notifications & Negotiation',
       queue: approvalNotificationQueue,
+    },
+    {
+      name: BILLING_SCHEDULE_QUEUE,
+      displayName: 'Billing Schedule Engine',
+      queue: billingScheduleQueue,
+    },
+    {
+      name: PRORATION_QUEUE,
+      displayName: 'Mid-Cycle Subscription Proration',
+      queue: prorationQueue,
+    },
+    {
+      name: DEAL_HEALTH_SCAN_QUEUE,
+      displayName: 'Deal Health Scanner',
+      queue: dealHealthScanQueue,
     },
   ];
 

@@ -30,6 +30,25 @@ warehousesRouter.put(
   (req, res, next) => warehousesController.updateShippingRules(req, res, next)
 );
 
+// Scoped shipping-rule overrides (per customer / per warehouse). Managers and
+// Finance may also manage these alongside the Org Admin.
+warehousesRouter.get('/shipping-rules/resolve', (req, res, next) =>
+  warehousesController.resolveShippingRules(req, res, next)
+);
+warehousesRouter.get('/shipping-rules/overrides', (req, res, next) =>
+  warehousesController.listShippingRuleOverrides(req, res, next)
+);
+warehousesRouter.delete(
+  '/shipping-rules/overrides/:id',
+  requireRoles(['org_admin', 'manager', 'finance']),
+  (req, res, next) => warehousesController.deleteShippingRuleOverride(req, res, next)
+);
+warehousesRouter.put(
+  '/shipping-rules/overrides',
+  requireRoles(['org_admin', 'manager', 'finance']),
+  (req, res, next) => warehousesController.upsertShippingRuleOverride(req, res, next)
+);
+
 warehousesRouter.put(
   '/:id',
   requireRoles(['org_admin']),

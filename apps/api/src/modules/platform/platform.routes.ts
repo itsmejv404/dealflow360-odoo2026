@@ -19,3 +19,8 @@ platformRouter.post('/organizations/:id/invites', (req, res, next) => platformCo
 platformRouter.get('/organizations/:id/invites', (req, res, next) => platformController.listInvites(req, res, next));
 platformRouter.get('/organizations/:id/audit-logs', (req, res, next) => platformController.listAuditLogs(req, res, next));
 
+// Platform DLQ Management (Super Admin)
+platformRouter.get('/dlq', (req, res, next) => platformController.listPlatformDlq(req, res, next));
+platformRouter.post('/dlq/:id/retry', (req, res, next) => platformController.retryPlatformDlq(req, res, next));
+platformRouter.post('/dlq/:id/dismiss', (req, res, next) => platformController.dismissPlatformDlq(req, res, next));
+

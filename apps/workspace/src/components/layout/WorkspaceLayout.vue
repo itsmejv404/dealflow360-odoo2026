@@ -29,10 +29,29 @@ import {
   Menu,
   SlidersHorizontal,
   Warehouse as WarehouseIcon,
+  Receipt,
+  Activity,
+  Sun,
+  Moon,
 } from 'lucide-vue-next';
+import { useTheme } from '@/lib/theme';
 
 const router = useRouter();
 const route = useRoute();
+const { preference: themePreference, setTheme } = useTheme();
+
+const themeCycles: Record<string, string> = {
+  light: 'Light mode',
+  dark: 'Dark mode',
+  system: 'System theme',
+};
+
+function cycleTheme() {
+  const order: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system'];
+  const current = themePreference.value ?? 'system';
+  const idx = order.indexOf(current);
+  setTheme(order[(idx + 1) % order.length]!);
+}
 
 const isOrgAdmin = computed(() => authStore.state.user?.role === 'org_admin');
 const isOps = computed(() => authStore.state.user?.role === 'ops');
@@ -142,6 +161,22 @@ function getRoleDisplay(role?: string): string {
             <span class="hidden xl:inline">Warehouses</span>
           </router-link>
 
+          <router-link
+            to="/billing"
+            :class="[navLinkClass, isActive('/billing') ? navLinkActiveClass : '']"
+          >
+            <Receipt class="w-4 h-4 shrink-0" />
+            <span class="hidden xl:inline">Billing</span>
+          </router-link>
+
+          <router-link
+            to="/deal-health"
+            :class="[navLinkClass, isActive('/deal-health') ? navLinkActiveClass : '']"
+          >
+            <Activity class="w-4 h-4 shrink-0" />
+            <span class="hidden xl:inline">Deal Health</span>
+          </router-link>
+
           <!-- Org Admin: configuration grouped behind one trigger -->
           <DropdownMenu v-if="isOrgAdmin">
             <DropdownMenuTrigger as-child>
@@ -172,8 +207,21 @@ function getRoleDisplay(role?: string): string {
           </DropdownMenu>
         </nav>
 
-        <!-- Right Side: user menu + mobile nav -->
+        <!-- Right Side: theme toggle + user menu + mobile nav -->
         <div class="flex items-center gap-1.5 shrink-0">
+          <!-- Theme toggle -->
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-9 w-9"
+            :title="themeCycles[themePreference] || 'Toggle theme'"
+            @click="cycleTheme"
+          >
+            <Sun v-if="themePreference === 'light'" class="w-4 h-4" />
+            <Moon v-else-if="themePreference === 'dark'" class="w-4 h-4" />
+            <Sun v-else class="w-4 h-4 opacity-60" />
+          </Button>
+
           <!-- Mobile navigation (below md) -->
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
@@ -202,6 +250,10 @@ function getRoleDisplay(role?: string): string {
               <DropdownMenuItem v-if="canManageInventory" @click="router.push('/warehouses')">
                 <WarehouseIcon class="mr-2 h-4 w-4" />
                 <span>Warehouses</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="router.push('/billing')">
+                <Receipt class="mr-2 h-4 w-4" />
+                <span>Billing</span>
               </DropdownMenuItem>
               <template v-if="isOrgAdmin">
                 <DropdownMenuSeparator />
@@ -279,6 +331,10 @@ function getRoleDisplay(role?: string): string {
                 </p>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem @click="router.push('/profile')">
+                <User class="mr-2 h-4 w-4" />
+                <span>My Profile</span>
+              </DropdownMenuItem>
               <DropdownMenuItem v-if="isOrgAdmin" @click="router.push('/settings/organization')">
                 <Settings class="mr-2 h-4 w-4" />
                 <span>Organization Settings</span>

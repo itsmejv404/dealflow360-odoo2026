@@ -13,6 +13,11 @@ import ApprovalsView from '../views/ApprovalsView.vue';
 import SuperAdminLoginView from '../views/SuperAdminLoginView.vue';
 import PlatformPortalView from '../views/PlatformPortalView.vue';
 import WarehousesView from '../views/WarehousesView.vue';
+import BillingView from '../views/BillingView.vue';
+import DealHealthView from '../views/DealHealthView.vue';
+import ProfileView from '../views/ProfileView.vue';
+import ForgotPasswordView from '../views/ForgotPasswordView.vue';
+import ResetPasswordView from '../views/ResetPasswordView.vue';
 import { authStore } from '../lib/auth';
 
 export const router = createRouter({
@@ -104,6 +109,33 @@ export const router = createRouter({
       meta: { requiresRoles: ['org_admin', 'ops'] },
     },
     {
+      path: '/billing',
+      name: 'billing',
+      component: BillingView,
+    },
+    {
+      path: '/deal-health',
+      name: 'deal-health',
+      component: DealHealthView,
+    },
+    {
+      path: '/profile',
+      name: 'profile',
+      component: ProfileView,
+    },
+    {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: ForgotPasswordView,
+      meta: { isPublic: true },
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: ResetPasswordView,
+      meta: { isPublic: true },
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       redirect: '/',
@@ -112,7 +144,7 @@ export const router = createRouter({
 });
 
 router.beforeEach((to, _from, next) => {
-  const publicNames = ['login', 'activate', 'superadmin-login', 'platform-login'];
+  const publicNames = ['login', 'activate', 'superadmin-login', 'platform-login', 'forgot-password', 'reset-password'];
   const publicPaths = ['/login', '/activate', '/superadmin/login', '/platform/login'];
   const cleanPath = to.path.replace(/\/$/, '') || '/';
   

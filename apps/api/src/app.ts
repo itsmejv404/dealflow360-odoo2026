@@ -15,8 +15,11 @@ import { rulebookRouter } from './modules/rulebook/rulebook.routes.js';
 import { tenantDemoRouter } from './modules/tenant-demo/demo.routes.js';
 import { usersRouter } from './modules/users/users.routes.js';
 import { warehousesRouter } from './modules/warehouses/warehouses.routes.js';
+import { billingRouter } from './modules/billing/billing.routes.js';
 import { errorHandler, notFoundHandler } from './shared/errors.js';
 import { fulfillmentRouter } from './modules/fulfillment/fulfillment.routes.js';
+import { dealHealthRouter } from './modules/dealhealth/dealhealth.routes.js';
+import { filesRouter } from './modules/files/files.routes.js';
 
 export function createApp(): express.Express {
   const app = express();
@@ -41,6 +44,9 @@ export function createApp(): express.Express {
   app.use('/api/users', usersRouter);
   app.use('/api/warehouses', warehousesRouter);
   app.use('/api/fulfillment', fulfillmentRouter);
+  app.use('/api/billing', billingRouter);
+  app.use('/api/dealhealth', dealHealthRouter);
+  app.use('/api/files', filesRouter);
   app.use('/api/demo', tenantDemoRouter);
 
   app.use(notFoundHandler);

@@ -164,11 +164,11 @@ onMounted(() => {
       <!-- Header Bar -->
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 class="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-            <Users class="w-6 h-6 text-indigo-600" />
+          <h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
+            <Users class="w-6 h-6 text-primary" />
             Team & Role-Based Access Control
           </h1>
-          <p class="text-sm text-slate-500">
+          <p class="text-sm text-muted-foreground">
             Manage organization members, assign role permissions, and issue invitations for {{ authStore.state.organization?.name }}.
           </p>
         </div>
@@ -176,7 +176,7 @@ onMounted(() => {
         <!-- Invite Member Dialog Trigger -->
         <Dialog v-model:open="isDialogOpen">
           <DialogTrigger as-child>
-            <Button class="bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs">
+            <Button class="bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs">
               <UserPlus class="w-4 h-4 mr-2" />
               Invite Team Member
             </Button>
@@ -216,7 +216,7 @@ onMounted(() => {
                 <select
                   id="invite-role"
                   v-model="inviteForm.role"
-                  class="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  class="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-ring"
                 >
                   <option v-for="r in rolesList" :key="r.value" :value="r.value">
                     {{ r.label }} — {{ r.desc }}
@@ -228,7 +228,7 @@ onMounted(() => {
                 <Button type="button" variant="outline" @click="isDialogOpen = false">
                   Cancel
                 </Button>
-                <Button type="submit" :disabled="isSubmitting" class="bg-indigo-600 hover:bg-indigo-700">
+                <Button type="submit" :disabled="isSubmitting" class="bg-primary text-primary-foreground hover:bg-primary/90">
                   {{ isSubmitting ? 'Sending Invite...' : 'Send Invitation' }}
                 </Button>
               </DialogFooter>
@@ -240,7 +240,7 @@ onMounted(() => {
       <!-- Alerts -->
       <div
         v-if="actionError"
-        class="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-center gap-2"
+        class="p-4 bg-destructive/10 border border-destructive/30 rounded-lg text-destructive text-sm flex items-center gap-2"
       >
         <AlertTriangle class="w-4 h-4 shrink-0" />
         <span>{{ actionError }}</span>
@@ -248,27 +248,27 @@ onMounted(() => {
 
       <div
         v-if="successMessage"
-        class="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-700 text-sm flex items-center gap-2"
+        class="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-700 dark:text-emerald-300 text-sm flex items-center gap-2"
       >
         <CheckCircle2 class="w-4 h-4 shrink-0" />
         <span>{{ successMessage }}</span>
       </div>
 
       <!-- Active Members Table -->
-      <Card class="border-slate-200 bg-white shadow-xs">
+      <Card class="border-border bg-card shadow-xs">
         <CardHeader class="pb-3">
           <div class="flex items-center justify-between">
             <div>
-              <CardTitle class="text-lg font-semibold text-slate-900">Organization Members</CardTitle>
+              <CardTitle class="text-lg font-semibold text-foreground">Organization Members</CardTitle>
               <CardDescription>Active and suspended members of your organization.</CardDescription>
             </div>
-            <Badge variant="secondary" class="font-semibold text-slate-700">
+            <Badge variant="secondary" class="font-semibold text-foreground">
               {{ users.length }} Total Members
             </Badge>
           </div>
         </CardHeader>
         <CardContent>
-          <div v-if="isLoading" class="py-8 text-center text-sm text-slate-400">
+          <div v-if="isLoading" class="py-8 text-center text-sm text-muted-foreground">
             Loading team members...
           </div>
           <Table v-else>
@@ -284,18 +284,18 @@ onMounted(() => {
             <TableBody>
               <TableRow v-for="u in users" :key="u.id">
                 <TableCell>
-                  <div class="font-medium text-slate-900">{{ u.name || 'Unnamed User' }}</div>
-                  <div class="text-xs text-slate-500">{{ u.email }}</div>
+                  <div class="font-medium text-foreground">{{ u.name || 'Unnamed User' }}</div>
+                  <div class="text-xs text-muted-foreground">{{ u.email }}</div>
                 </TableCell>
                 <TableCell>
                   <span
                     class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold"
                     :class="{
                       'bg-indigo-100 text-indigo-800 border border-indigo-200': u.role === 'org_admin',
-                      'bg-blue-100 text-blue-800 border border-blue-200': u.role === 'rep',
-                      'bg-amber-100 text-amber-800 border border-amber-200': u.role === 'manager',
-                      'bg-emerald-100 text-emerald-800 border border-emerald-200': u.role === 'finance',
-                      'bg-purple-100 text-purple-800 border border-purple-200': u.role === 'ops',
+                      'bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800': u.role === 'rep',
+                      'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800': u.role === 'manager',
+                      'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800': u.role === 'finance',
+                      'bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800': u.role === 'ops',
                     }"
                   >
                     {{ formatRoleLabel(u.role) }}
@@ -304,12 +304,12 @@ onMounted(() => {
                 <TableCell>
                   <Badge
                     :variant="u.status === 'active' ? 'outline' : 'destructive'"
-                    :class="{ 'bg-emerald-50 text-emerald-700 border-emerald-200': u.status === 'active' }"
+                    :class="{ 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800': u.status === 'active' }"
                   >
                     {{ u.status === 'active' ? 'Active' : 'Suspended' }}
                   </Badge>
                 </TableCell>
-                <TableCell class="text-xs text-slate-500">
+                <TableCell class="text-xs text-muted-foreground">
                   {{ new Date(u.createdAt).toLocaleDateString() }}
                 </TableCell>
                 <TableCell class="text-right">
@@ -317,13 +317,13 @@ onMounted(() => {
                     v-if="u.id !== authStore.state.user?.id"
                     variant="ghost"
                     size="sm"
-                    :class="u.status === 'active' ? 'text-red-600 hover:text-red-700 hover:bg-red-50' : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'"
+                    :class="u.status === 'active' ? 'text-destructive hover:text-destructive hover:bg-destructive/10' : 'text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 hover:bg-emerald-500/10'"
                     @click="toggleUserStatus(u)"
                   >
                     <component :is="u.status === 'active' ? UserX : UserCheck" class="w-3.5 h-3.5 mr-1" />
                     {{ u.status === 'active' ? 'Suspend' : 'Reactivate' }}
                   </Button>
-                  <span v-else class="text-xs text-slate-400 italic">Current User</span>
+                  <span v-else class="text-xs text-muted-foreground italic">Current User</span>
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -332,14 +332,14 @@ onMounted(() => {
       </Card>
 
       <!-- Pending Invitations Table -->
-      <Card v-if="pendingInvites.length > 0" class="border-slate-200 bg-white shadow-xs">
+      <Card v-if="pendingInvites.length > 0" class="border-border bg-card shadow-xs">
         <CardHeader class="pb-3">
           <div class="flex items-center justify-between">
             <div>
-              <CardTitle class="text-lg font-semibold text-slate-900">Pending Invitations</CardTitle>
+              <CardTitle class="text-lg font-semibold text-foreground">Pending Invitations</CardTitle>
               <CardDescription>Awaiting account activation by invited colleagues.</CardDescription>
             </div>
-            <Badge variant="outline" class="text-amber-700 bg-amber-50 border-amber-200">
+            <Badge variant="outline" class="text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950 border-amber-200 dark:border-amber-800">
               {{ pendingInvites.length }} Pending
             </Badge>
           </div>
@@ -356,17 +356,17 @@ onMounted(() => {
             </TableHeader>
             <TableBody>
               <TableRow v-for="inv in pendingInvites" :key="inv.id">
-                <TableCell class="font-medium text-slate-900 flex items-center gap-1.5">
-                  <Mail class="w-3.5 h-3.5 text-slate-400" />
+                <TableCell class="font-medium text-foreground flex items-center gap-1.5">
+                  <Mail class="w-3.5 h-3.5 text-muted-foreground" />
                   {{ inv.email }}
                 </TableCell>
                 <TableCell>
                   <Badge variant="secondary">{{ formatRoleLabel(inv.role) }}</Badge>
                 </TableCell>
-                <TableCell class="text-xs text-slate-500">
+                <TableCell class="text-xs text-muted-foreground">
                   {{ new Date(inv.createdAt).toLocaleDateString() }}
                 </TableCell>
-                <TableCell class="text-xs text-slate-500">
+                <TableCell class="text-xs text-muted-foreground">
                   {{ new Date(inv.expiresAt).toLocaleDateString() }}
                 </TableCell>
               </TableRow>

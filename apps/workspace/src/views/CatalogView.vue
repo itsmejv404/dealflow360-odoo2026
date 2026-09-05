@@ -36,9 +36,7 @@ import {
   AlertTriangle,
   Layers,
   Award,
-  Grid3X3,
   RefreshCw,
-  Save,
   DollarSign,
   Tag,
   Clock,
@@ -77,29 +75,11 @@ interface Product {
   costPrice?: number | null;
   billingFrequency: 'one_time' | 'monthly' | 'quarterly' | 'annual';
   status: 'active' | 'archived';
+  maxDiscountPercent?: number | null;
   category?: { id: string; name: string; code: string } | null;
   priceListItems?: TierPriceItem[];
 }
 
-interface MatrixProduct {
-  product: {
-    id: string;
-    name: string;
-    sku: string;
-    price: number;
-    costPrice: number | null;
-    billingFrequency: string;
-    category: { id: string; name: string } | null;
-  };
-  tierPrices: Record<
-    string,
-    {
-      customPrice: number | null;
-      effectivePrice: number;
-      isCustom: boolean;
-    }
-  >;
-}
 
 // State
 const activeTab = ref('products');
@@ -111,8 +91,6 @@ const successMessage = ref<string | null>(null);
 const products = ref<Product[]>([]);
 const categories = ref<Category[]>([]);
 const tiers = ref<CustomerTier[]>([]);
-const matrixData = ref<MatrixProduct[]>([]);
-const matrixTiers = ref<CustomerTier[]>([]);
 
 // Filters
 const searchQuery = ref('');
@@ -128,9 +106,6 @@ const editingCategoryId = ref<string | null>(null);
 const editingTierId = ref<string | null>(null);
 const isSubmitting = ref(false);
 
-// Matrix editable state (map key: `${productId}:${tierId}` => customPrice input string)
-const matrixEdits = reactive<Record<string, string>>({});
-const isSavingMatrix = ref(false);
 
 // Forms
 const productForm = reactive({
@@ -142,6 +117,7 @@ const productForm = reactive({
   costPrice: 0,
   billingFrequency: 'one_time' as 'one_time' | 'monthly' | 'quarterly' | 'annual',
   status: 'active' as 'active' | 'archived',
+  maxDiscountPercent: null as number | null,
   tierOverrides: {} as Record<string, number | undefined>,
 });
 
@@ -189,10 +165,6 @@ async function loadAllData() {
     categories.value = catsRes.categories;
     tiers.value = tiersRes.tiers;
     products.value = prodsRes.products;
-
-    if (activeTab.value === 'pricelists') {
-      await loadPriceMatrix();
-    }
   } catch (err: any) {
     actionError.value = err.message || 'Failed to load catalog data';
   } finally {
@@ -200,36 +172,10 @@ async function loadAllData() {
   }
 }
 
-async function loadPriceMatrix() {
-  try {
-    const res = await apiRequest<{ tiers: CustomerTier[]; matrix: MatrixProduct[] }>('/api/catalog/pricelists');
-    matrixTiers.value = res.tiers;
-    matrixData.value = res.matrix;
-
-    // Initialize matrix editable state
-    for (const row of res.matrix) {
-      for (const t of res.tiers) {
-        const key = `${row.product.id}:${t.id}`;
-        const tierInfo = row.tierPrices[t.id];
-        if (tierInfo?.customPrice !== null && tierInfo?.customPrice !== undefined) {
-          matrixEdits[key] = tierInfo.customPrice.toString();
-        } else {
-          matrixEdits[key] = '';
-        }
-      }
-    }
-  } catch (err: any) {
-    actionError.value = err.message || 'Failed to load price lists matrix';
-  }
-}
-
 function handleTabChange(tab: string | number) {
   activeTab.value = String(tab);
   actionError.value = null;
   successMessage.value = null;
-  if (String(tab) === 'pricelists') {
-    loadPriceMatrix();
-  }
 }
 
 // ================= PRODUCT ACTIONS =================
@@ -244,6 +190,7 @@ function openAddProductDialog() {
   productForm.costPrice = 0;
   productForm.billingFrequency = 'one_time';
   productForm.status = 'active';
+  productForm.maxDiscountPercent = null;
   productForm.tierOverrides = {};
   for (const t of tiers.value) {
     productForm.tierOverrides[t.id] = undefined;
@@ -261,6 +208,7 @@ function openEditProductDialog(prod: Product) {
   productForm.costPrice = prod.costPrice ? Number(prod.costPrice) : 0;
   productForm.billingFrequency = prod.billingFrequency;
   productForm.status = prod.status;
+  productForm.maxDiscountPercent = prod.maxDiscountPercent !== null && prod.maxDiscountPercent !== undefined ? Number(prod.maxDiscountPercent) : null;
   productForm.tierOverrides = {};
 
   for (const t of tiers.value) {
@@ -297,6 +245,12 @@ async function handleSaveProduct() {
       costPrice: parsedCost && parsedCost !== 0 ? parsedCost : undefined,
       billingFrequency: productForm.billingFrequency,
       status: productForm.status,
+      maxDiscountPercent:
+        productForm.maxDiscountPercent !== null &&
+        productForm.maxDiscountPercent !== undefined &&
+        !isNaN(Number(productForm.maxDiscountPercent))
+          ? Number(productForm.maxDiscountPercent)
+          : null,
       tierPrices,
     };
 
@@ -460,44 +414,6 @@ async function handleDeleteTier(t: CustomerTier) {
   }
 }
 
-// ================= MATRIX BATCH SAVE =================
-
-async function handleSaveMatrix() {
-  isSavingMatrix.value = true;
-  actionError.value = null;
-  successMessage.value = null;
-
-  try {
-    const items: Array<{ tierId: string; productId: string; customPrice: number }> = [];
-
-    for (const [key, valStr] of Object.entries(matrixEdits)) {
-      const parts = key.split(':');
-      const productId = parts[0];
-      const tierId = parts[1];
-      if (productId && tierId) {
-        const numVal = parseFloat(valStr);
-        items.push({
-          productId,
-          tierId,
-          customPrice: isNaN(numVal) ? 0 : numVal,
-        });
-      }
-    }
-
-    const res = await apiRequest<{ count: number }>('/api/catalog/pricelists/matrix', {
-      method: 'PUT',
-      data: { items },
-    });
-
-    successMessage.value = `Successfully saved ${res.count} price list matrix updates!`;
-    await loadPriceMatrix();
-  } catch (err: any) {
-    actionError.value = err.message || 'Failed to save price list matrix';
-  } finally {
-    isSavingMatrix.value = false;
-  }
-}
-
 function formatCurrency(val?: number | null) {
   if (val === undefined || val === null) return '-';
   return formatMoney(val);
@@ -527,12 +443,12 @@ onMounted(() => {
       <!-- Header Bar -->
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 class="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-            <Package class="w-6 h-6 text-indigo-600" />
+          <h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
+            <Package class="w-6 h-6 text-primary" />
             Product Catalog & Price Lists
           </h1>
-          <p class="text-sm text-slate-500">
-            Configure products, categories, customer tiers, and tier-specific pricing for {{ authStore.state.organization?.name }}.
+          <p class="text-sm text-muted-foreground">
+            Configure products, categories, customer tiers, and per-product discount ceilings for {{ authStore.state.organization?.name }}.
           </p>
         </div>
 
@@ -544,7 +460,7 @@ onMounted(() => {
 
           <Button
             v-if="isOrgAdmin && activeTab === 'products'"
-            class="bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs"
+            class="bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
             @click="openAddProductDialog"
           >
             <Plus class="w-4 h-4 mr-1.5" />
@@ -553,7 +469,7 @@ onMounted(() => {
 
           <Button
             v-if="isOrgAdmin && activeTab === 'categories'"
-            class="bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs"
+            class="bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
             @click="openAddCategoryDialog"
           >
             <Plus class="w-4 h-4 mr-1.5" />
@@ -562,7 +478,7 @@ onMounted(() => {
 
           <Button
             v-if="isOrgAdmin && activeTab === 'tiers'"
-            class="bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs"
+            class="bg-primary text-primary-foreground hover:bg-primary/90 shadow-xs"
             @click="openAddTierDialog"
           >
             <Plus class="w-4 h-4 mr-1.5" />
@@ -574,7 +490,7 @@ onMounted(() => {
       <!-- Alerts -->
       <div
         v-if="actionError"
-        class="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-center gap-2"
+        class="p-4 bg-destructive/10 border border-destructive/30 rounded-lg text-destructive text-sm flex items-center gap-2"
       >
         <AlertTriangle class="w-4 h-4 shrink-0" />
         <span>{{ actionError }}</span>
@@ -582,7 +498,7 @@ onMounted(() => {
 
       <div
         v-if="successMessage"
-        class="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-700 text-sm flex items-center gap-2"
+        class="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-700 dark:text-emerald-300 text-sm flex items-center gap-2"
       >
         <CheckCircle2 class="w-4 h-4 shrink-0" />
         <span>{{ successMessage }}</span>
@@ -590,14 +506,10 @@ onMounted(() => {
 
       <!-- Tabs Navigation -->
       <Tabs :model-value="activeTab" class="w-full" @update:model-value="handleTabChange">
-        <TabsList class="grid grid-cols-4 w-full max-w-2xl bg-slate-100 p-1 rounded-lg">
+        <TabsList class="grid grid-cols-3 w-full max-w-2xl p-1 rounded-lg">
           <TabsTrigger value="products" class="flex items-center gap-2 text-xs sm:text-sm">
             <Package class="w-4 h-4" />
             Products ({{ products.length }})
-          </TabsTrigger>
-          <TabsTrigger value="pricelists" class="flex items-center gap-2 text-xs sm:text-sm">
-            <Grid3X3 class="w-4 h-4" />
-            Price Lists Matrix
           </TabsTrigger>
           <TabsTrigger value="categories" class="flex items-center gap-2 text-xs sm:text-sm">
             <Layers class="w-4 h-4" />
@@ -612,7 +524,7 @@ onMounted(() => {
         <!-- ================= TAB 1: PRODUCTS ================= -->
         <TabsContent value="products" class="mt-4 space-y-4">
           <!-- Filters Card -->
-          <Card class="border-slate-200 bg-white shadow-xs">
+          <Card class="border-border bg-card shadow-xs">
             <CardContent class="p-4">
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div class="relative">
@@ -626,7 +538,7 @@ onMounted(() => {
                 <div>
                   <select
                     v-model="filterCategoryId"
-                    class="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                    class="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-ring"
                   >
                     <option value="">All Categories</option>
                     <option v-for="c in categories" :key="c.id" :value="c.id">
@@ -637,7 +549,7 @@ onMounted(() => {
                 <div>
                   <select
                     v-model="filterStatus"
-                    class="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                    class="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-ring"
                   >
                     <option value="">All Statuses</option>
                     <option value="active">Active Only</option>
@@ -649,22 +561,22 @@ onMounted(() => {
           </Card>
 
           <!-- Products Table -->
-          <Card class="border-slate-200 bg-white shadow-xs">
+          <Card class="border-border bg-card shadow-xs">
             <CardHeader class="pb-3">
               <div class="flex items-center justify-between">
                 <div>
-                  <CardTitle class="text-lg font-semibold text-slate-900">Products Catalog</CardTitle>
+                  <CardTitle class="text-lg font-semibold text-foreground">Products Catalog</CardTitle>
                   <CardDescription>
                     All items available for quotations in your organization.
                   </CardDescription>
                 </div>
-                <Badge variant="secondary" class="font-medium text-slate-700">
+                <Badge variant="secondary" class="font-medium text-foreground">
                   {{ filteredProducts.length }} Products Shown
                 </Badge>
               </div>
             </CardHeader>
             <CardContent>
-              <div v-if="isLoading" class="py-12 text-center text-sm text-slate-400">
+              <div v-if="isLoading" class="py-12 text-center text-sm text-muted-foreground">
                 Loading products...
               </div>
               <div v-else-if="filteredProducts.length === 0" class="py-12 text-center">
@@ -680,6 +592,7 @@ onMounted(() => {
                     <TableHead>Category</TableHead>
                     <TableHead>Billing Cadence</TableHead>
                     <TableHead class="text-right">Base Price</TableHead>
+                    <TableHead class="text-right">Max Discount</TableHead>
                     <TableHead class="text-right">Cost Price</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead v-if="isOrgAdmin" class="text-right">Actions</TableHead>
@@ -688,13 +601,13 @@ onMounted(() => {
                 <TableBody>
                   <TableRow v-for="prod in filteredProducts" :key="prod.id">
                     <TableCell>
-                      <div class="font-medium text-slate-900">{{ prod.name }}</div>
-                      <div v-if="prod.description" class="text-xs text-slate-500 line-clamp-1 max-w-xs">
+                      <div class="font-medium text-foreground">{{ prod.name }}</div>
+                      <div v-if="prod.description" class="text-xs text-muted-foreground line-clamp-1 max-w-xs">
                         {{ prod.description }}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <code class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-xs font-mono">
+                      <code class="px-2 py-0.5 rounded bg-muted text-foreground text-xs font-mono">
                         {{ prod.sku }}
                       </code>
                     </TableCell>
@@ -709,16 +622,26 @@ onMounted(() => {
                         {{ getBillingCadenceBadge(prod.billingFrequency).label }}
                       </Badge>
                     </TableCell>
-                    <TableCell class="text-right font-semibold text-slate-900">
+                    <TableCell class="text-right font-semibold text-foreground">
                       {{ formatCurrency(prod.price) }}
                     </TableCell>
-                    <TableCell class="text-right text-slate-500 text-xs">
+                    <TableCell class="text-right">
+                      <Badge
+                        v-if="prod.maxDiscountPercent !== null && prod.maxDiscountPercent !== undefined"
+                        variant="outline"
+                        class="text-xs font-semibold text-primary"
+                      >
+                        {{ Number(prod.maxDiscountPercent).toFixed(1) }}% max
+                      </Badge>
+                      <span v-else class="text-xs text-muted-foreground">Rulebook</span>
+                    </TableCell>
+                    <TableCell class="text-right text-muted-foreground text-xs">
                       {{ prod.costPrice ? formatCurrency(prod.costPrice) : '—' }}
                     </TableCell>
                     <TableCell>
                       <Badge
                         :variant="prod.status === 'active' ? 'outline' : 'secondary'"
-                        :class="{ 'bg-emerald-50 text-emerald-700 border-emerald-200': prod.status === 'active' }"
+                        :class="{ 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800': prod.status === 'active' }"
                       >
                         {{ prod.status === 'active' ? 'Active' : 'Archived' }}
                       </Badge>
@@ -728,7 +651,7 @@ onMounted(() => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          class="h-8 w-8 p-0 text-slate-600 hover:text-indigo-600"
+                          class="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
                           @click="openEditProductDialog(prod)"
                         >
                           <Edit2 class="w-3.5 h-3.5" />
@@ -736,7 +659,7 @@ onMounted(() => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          class="h-8 w-8 p-0 text-slate-600 hover:text-red-600"
+                          class="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
                           @click="handleDeleteProduct(prod)"
                         >
                           <Trash2 class="w-3.5 h-3.5" />
@@ -750,126 +673,18 @@ onMounted(() => {
           </Card>
         </TabsContent>
 
-        <!-- ================= TAB 2: PRICE LISTS MATRIX ================= -->
-        <TabsContent value="pricelists" class="mt-4 space-y-4">
-          <Card class="border-slate-200 bg-white shadow-xs">
-            <CardHeader class="pb-3">
-              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div>
-                  <CardTitle class="text-lg font-semibold text-slate-900">
-                    Tier Pricing Matrix (Product × Customer Tier)
-                  </CardTitle>
-                  <CardDescription>
-                    Configure explicit custom tier prices. Leaving a cell blank automatically applies the tier's default discount from base price.
-                  </CardDescription>
-                </div>
-                <div v-if="isOrgAdmin" class="flex items-center gap-2">
-                  <Button
-                    class="bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs"
-                    :disabled="isSavingMatrix"
-                    @click="handleSaveMatrix"
-                  >
-                    <Save class="w-4 h-4 mr-1.5" />
-                    {{ isSavingMatrix ? 'Saving Matrix...' : 'Save Pricing Matrix' }}
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div v-if="isLoading" class="py-12 text-center text-sm text-slate-400">
-                Loading price matrix...
-              </div>
-              <div v-else-if="matrixData.length === 0" class="py-12 text-center">
-                <Grid3X3 class="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p class="text-sm font-medium text-slate-600">No products available in the catalog</p>
-                <p class="text-xs text-slate-400 mt-1">Create products first to configure their tier pricing.</p>
-              </div>
-              <div v-else class="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead class="min-w-[200px]">Product</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead class="text-right">Base Price</TableHead>
-                      <TableHead
-                        v-for="t in matrixTiers"
-                        :key="t.id"
-                        class="min-w-[160px] text-center bg-slate-50/70 border-l border-slate-200"
-                      >
-                        <div class="font-semibold text-slate-900">{{ t.name }} Tier</div>
-                        <div class="text-2xs text-slate-500 font-normal">
-                          Default: {{ t.defaultDiscountPercent }}% off
-                        </div>
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow v-for="row in matrixData" :key="row.product.id">
-                      <TableCell>
-                        <div class="font-medium text-slate-900">{{ row.product.name }}</div>
-                        <div class="text-xs text-slate-500 font-mono">{{ row.product.sku }}</div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" class="text-2xs">
-                          {{ row.product.category?.name || 'Standard' }}
-                        </Badge>
-                      </TableCell>
-                      <TableCell class="text-right font-semibold text-slate-900">
-                        {{ formatCurrency(row.product.price) }}
-                      </TableCell>
-                      <TableCell
-                        v-for="t in matrixTiers"
-                        :key="t.id"
-                        class="border-l border-slate-200 bg-slate-50/30"
-                      >
-                        <div v-if="isOrgAdmin" class="space-y-1">
-                          <Input
-                            v-model="matrixEdits[`${row.product.id}:${t.id}`]"
-                            type="number"
-                            step="0.01"
-                            placeholder="Auto Discount"
-                            class="h-8 text-xs"
-                          />
-                          <div class="flex items-center justify-between text-2xs text-slate-500 px-1">
-                            <span>Effective:</span>
-                            <span class="font-semibold text-indigo-700">
-                              {{ formatCurrency(row.tierPrices[t.id]?.effectivePrice) }}
-                            </span>
-                          </div>
-                        </div>
-                        <div v-else class="text-center">
-                          <span class="font-semibold text-indigo-700">
-                            {{ formatCurrency(row.tierPrices[t.id]?.effectivePrice) }}
-                          </span>
-                          <Badge
-                            v-if="row.tierPrices[t.id]?.isCustom"
-                            variant="secondary"
-                            class="ml-1 text-2xs"
-                          >
-                            Custom
-                          </Badge>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <!-- ================= TAB 3: CATEGORIES ================= -->
+        <!-- ================= TAB 2: CATEGORIES ================= -->
         <TabsContent value="categories" class="mt-4 space-y-4">
-          <Card class="border-slate-200 bg-white shadow-xs">
+          <Card class="border-border bg-card shadow-xs">
             <CardHeader class="pb-3">
               <div class="flex items-center justify-between">
                 <div>
-                  <CardTitle class="text-lg font-semibold text-slate-900">Product Categories</CardTitle>
+                  <CardTitle class="text-lg font-semibold text-foreground">Product Categories</CardTitle>
                   <CardDescription>
                     Categories classify products for catalog browsing, billing rules, and discount approval ceilings.
                   </CardDescription>
                 </div>
-                <Badge variant="secondary" class="font-medium text-slate-700">
+                <Badge variant="secondary" class="font-medium text-foreground">
                   {{ categories.length }} Categories
                 </Badge>
               </div>
@@ -887,15 +702,15 @@ onMounted(() => {
                 </TableHeader>
                 <TableBody>
                   <TableRow v-for="cat in categories" :key="cat.id">
-                    <TableCell class="font-semibold text-slate-900">
+                    <TableCell class="font-semibold text-foreground">
                       {{ cat.name }}
                     </TableCell>
                     <TableCell>
-                      <code class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-xs font-mono">
+                      <code class="px-2 py-0.5 rounded bg-muted text-foreground text-xs font-mono">
                         {{ cat.code }}
                       </code>
                     </TableCell>
-                    <TableCell class="text-xs text-slate-500 max-w-md">
+                    <TableCell class="text-xs text-muted-foreground max-w-md">
                       {{ cat.description || '—' }}
                     </TableCell>
                     <TableCell class="text-center">
@@ -908,7 +723,7 @@ onMounted(() => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          class="h-8 w-8 p-0 text-slate-600 hover:text-indigo-600"
+                          class="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
                           @click="openEditCategoryDialog(cat)"
                         >
                           <Edit2 class="w-3.5 h-3.5" />
@@ -916,7 +731,7 @@ onMounted(() => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          class="h-8 w-8 p-0 text-slate-600 hover:text-red-600"
+                          class="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
                           :disabled="(cat._count?.products ?? 0) > 0"
                           @click="handleDeleteCategory(cat)"
                         >
@@ -931,18 +746,18 @@ onMounted(() => {
           </Card>
         </TabsContent>
 
-        <!-- ================= TAB 4: CUSTOMER TIERS ================= -->
+        <!-- ================= TAB 3: CUSTOMER TIERS ================= -->
         <TabsContent value="tiers" class="mt-4 space-y-4">
-          <Card class="border-slate-200 bg-white shadow-xs">
+          <Card class="border-border bg-card shadow-xs">
             <CardHeader class="pb-3">
               <div class="flex items-center justify-between">
                 <div>
-                  <CardTitle class="text-lg font-semibold text-slate-900">Customer Tiers</CardTitle>
+                  <CardTitle class="text-lg font-semibold text-foreground">Customer Tiers</CardTitle>
                   <CardDescription>
                     Customer accounts belong to tiers which govern their price-list discounts.
                   </CardDescription>
                 </div>
-                <Badge variant="secondary" class="font-medium text-slate-700">
+                <Badge variant="secondary" class="font-medium text-foreground">
                   {{ tiers.length }} Tiers Configured
                 </Badge>
               </div>
@@ -962,23 +777,23 @@ onMounted(() => {
                 <TableBody>
                   <TableRow v-for="(t, tierIdx) in tiers" :key="t.id">
                     <TableCell>
-                      <span class="text-xs font-semibold text-slate-600">{{ tierIdx + 1 }}</span>
+                      <span class="text-xs font-semibold text-muted-foreground">{{ tierIdx + 1 }}</span>
                     </TableCell>
-                    <TableCell class="font-semibold text-slate-900 flex items-center gap-1.5">
+                    <TableCell class="font-semibold text-foreground flex items-center gap-1.5">
                       <Award class="w-4 h-4 text-amber-500" />
                       {{ t.name }}
                     </TableCell>
                     <TableCell>
-                      <code class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-xs font-mono">
+                      <code class="px-2 py-0.5 rounded bg-muted text-foreground text-xs font-mono">
                         {{ t.code }}
                       </code>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary" class="font-semibold text-indigo-700">
+                      <Badge variant="secondary" class="font-semibold text-primary">
                         {{ t.defaultDiscountPercent }}% OFF
                       </Badge>
                     </TableCell>
-                    <TableCell class="text-xs text-slate-500 max-w-md">
+                    <TableCell class="text-xs text-muted-foreground max-w-md">
                       {{ t.description || '—' }}
                     </TableCell>
                     <TableCell v-if="isOrgAdmin" class="text-right">
@@ -986,7 +801,7 @@ onMounted(() => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          class="h-8 w-8 p-0 text-slate-600 hover:text-indigo-600"
+                          class="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
                           @click="openEditTierDialog(t)"
                         >
                           <Edit2 class="w-3.5 h-3.5" />
@@ -994,7 +809,7 @@ onMounted(() => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          class="h-8 w-8 p-0 text-slate-600 hover:text-red-600"
+                          class="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
                           @click="handleDeleteTier(t)"
                         >
                           <Trash2 class="w-3.5 h-3.5" />
@@ -1037,7 +852,7 @@ onMounted(() => {
                 <select
                   id="prod-cat"
                   v-model="productForm.categoryId"
-                  class="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  class="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-ring"
                 >
                   <option value="">None / Uncategorized</option>
                   <option v-for="c in categories" :key="c.id" :value="c.id">
@@ -1050,7 +865,7 @@ onMounted(() => {
                 <select
                   id="prod-cadence"
                   v-model="productForm.billingFrequency"
-                  class="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  class="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-ring"
                 >
                   <option value="one_time">One-Time Purchase</option>
                   <option value="monthly">Monthly Subscription</option>
@@ -1085,27 +900,44 @@ onMounted(() => {
             </div>
 
             <div class="grid gap-1.5">
+              <Label for="prod-max-disc">Maximum Discount Threshold (%) — Optional</Label>
+              <Input
+                id="prod-max-disc"
+                :model-value="productForm.maxDiscountPercent ?? undefined"
+                @update:model-value="productForm.maxDiscountPercent = $event === '' || $event === null ? null : Number($event)"
+                type="number"
+                step="0.1"
+                min="0"
+                max="100"
+                placeholder="e.g. 15 — leave blank to use the rulebook ceilings"
+              />
+              <p class="text-2xs text-muted-foreground">
+                Discounts beyond this threshold on this product are flagged and routed for approval. If unset, the discount rulebook ceilings apply.
+              </p>
+            </div>
+
+            <div class="grid gap-1.5">
               <Label for="prod-desc">Description</Label>
               <textarea
                 id="prod-desc"
                 v-model="productForm.description"
                 rows="2"
-                class="flex w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                class="flex w-full rounded-md border border-border bg-background px-3 py-2 text-sm shadow-2xs focus:outline-hidden focus:ring-2 focus:ring-ring"
                 placeholder="Key specs, SLA terms, or notes..."
               ></textarea>
             </div>
 
             <!-- Customer Tier Custom Prices -->
             <div class="border-t border-slate-200 pt-3 space-y-2">
-              <Label class="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              <Label class="text-xs font-bold text-foreground uppercase tracking-wider">
                 Tier-Specific Price Overrides (Optional)
               </Label>
               <p class="text-2xs text-slate-500">
                 Override list price for specific customer tiers. If empty, the tier's default discount will calculate automatically.
               </p>
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-                <div v-for="t in tiers" :key="t.id" class="p-2 border border-slate-100 rounded bg-slate-50">
-                  <span class="text-xs font-semibold text-slate-800 block">{{ t.name }}</span>
+                <div v-for="t in tiers" :key="t.id" class="p-2 border border-border rounded bg-muted/40">
+                  <span class="text-xs font-semibold text-foreground block">{{ t.name }}</span>
                   <span class="text-2xs text-slate-500 block mb-1">Default: {{ t.defaultDiscountPercent }}% off</span>
                   <Input
                     v-model.number="productForm.tierOverrides[t.id]"
@@ -1122,7 +954,7 @@ onMounted(() => {
               <Button type="button" variant="outline" @click="isProductDialogOpen = false">
                 Cancel
               </Button>
-              <Button type="submit" :disabled="isSubmitting" class="bg-indigo-600 hover:bg-indigo-700">
+              <Button type="submit" :disabled="isSubmitting" class="bg-primary text-primary-foreground hover:bg-primary/90">
                 {{ isSubmitting ? 'Saving...' : editingProductId ? 'Save Changes' : 'Create Product' }}
               </Button>
             </DialogFooter>
@@ -1160,7 +992,7 @@ onMounted(() => {
               <Button type="button" variant="outline" @click="isCategoryDialogOpen = false">
                 Cancel
               </Button>
-              <Button type="submit" :disabled="isSubmitting" class="bg-indigo-600 hover:bg-indigo-700">
+              <Button type="submit" :disabled="isSubmitting" class="bg-primary text-primary-foreground hover:bg-primary/90">
                 {{ isSubmitting ? 'Saving...' : 'Save Category' }}
               </Button>
             </DialogFooter>
@@ -1214,7 +1046,7 @@ onMounted(() => {
               <Button type="button" variant="outline" @click="isTierDialogOpen = false">
                 Cancel
               </Button>
-              <Button type="submit" :disabled="isSubmitting" class="bg-indigo-600 hover:bg-indigo-700">
+              <Button type="submit" :disabled="isSubmitting" class="bg-primary text-primary-foreground hover:bg-primary/90">
                 {{ isSubmitting ? 'Saving...' : 'Save Customer Tier' }}
               </Button>
             </DialogFooter>

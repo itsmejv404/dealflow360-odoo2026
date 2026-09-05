@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, reactive, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { apiRequest } from '@/lib/api';
 import { authStore } from '@/lib/auth';
+import { formatCurrency as formatMoney } from '@/lib/currency';
 import { getSocket } from '@/lib/socket';
 import WorkspaceLayout from '@/components/layout/WorkspaceLayout.vue';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -44,8 +45,6 @@ import {
   PackageX,
   Zap,
   Clock,
-  Activity,
-  Cpu,
   ArrowUpRight,
 } from 'lucide-vue-next';
 
@@ -72,15 +71,19 @@ interface StockMatrix {
     isDefault: boolean;
     status: string;
     columnTotal: number;
+    columnWorth: number;
   }>;
   rows: Array<{
     productId: string;
     productName: string;
     sku: string;
     quantities: Record<string, number>;
+    worth: Record<string, number>;
     total: number;
+    totalWorth: number;
   }>;
   grandTotal: number;
+  grandTotalWorth: number;
 }
 
 interface ShippingRules {
@@ -119,27 +122,7 @@ interface ConsolidationPromptRecord {
   quotation?: { id: string; quotationNumber: string };
 }
 
-interface QueueStatusResponse {
-  timestamp: string;
-  workers: {
-    approval: { name: string; status: string; concurrency: number; isPaused: boolean };
-    backorder: { name: string; status: string; concurrency: number; isPaused: boolean };
-  };
-  queues: {
-    backorders: {
-      queueName: string;
-      counts: { waiting: number; active: number; completed: number; failed: number; delayed: number; paused: number };
-      isPaused: boolean;
-    };
-    approvals: {
-      queueName: string;
-      counts: { waiting: number; active: number; completed: number; failed: number; delayed: number; paused: number };
-      isPaused: boolean;
-    };
-  };
-}
-
-const activeTab = ref<'warehouses' | 'stock' | 'backorders' | 'queue' | 'shipping'>('warehouses');
+const activeTab = ref<'warehouses' | 'stock' | 'backorders' | 'shipping'>('warehouses');
 const isLoading = ref(true);
 const isSaving = ref(false);
 const actionError = ref<string | null>(null);
@@ -199,7 +182,7 @@ async function submitStockArrival() {
     const prod = stockMatrix.value?.rows.find((r) => r.productId === stockArrivalForm.productId);
     successMessage.value = `Stock recorded! +${stockArrivalForm.quantity} unit(s) of ${prod?.productName || 'product'} in ${wh?.name || 'warehouse'}. Auto-consolidation job enqueued (Job #${res.jobId || 'done'})!`;
     isStockArrivalDialogOpen.value = false;
-    await Promise.all([loadStock(), loadBackordersAndPrompts(), loadQueueStatus()]);
+    await Promise.all([loadStock(), loadBackordersAndPrompts()]);
     setTimeout(() => {
       if (successMessage.value?.startsWith('Stock recorded')) {
         successMessage.value = null;
@@ -243,7 +226,7 @@ async function handleConsolidatePrompt(prompt: ConsolidationPromptRecord) {
       body: '{}',
     });
     successMessage.value = `Backorder consolidated for quotation #${prompt.quotation?.quotationNumber || ''}! Stock deducted from ${prompt.warehouse?.name || 'warehouse'}.`;
-    await Promise.all([loadBackordersAndPrompts(), loadStock(), loadQueueStatus()]);
+    await Promise.all([loadBackordersAndPrompts(), loadStock()]);
     setTimeout(() => {
       if (successMessage.value?.startsWith('Backorder consolidated')) {
         successMessage.value = null;
@@ -278,62 +261,6 @@ async function handleDismissPrompt(prompt: ConsolidationPromptRecord) {
   }
 }
 
-// ---- Queue Health & Worker Liveness (Phase 17) ----
-const queueStatus = ref<QueueStatusResponse | null>(null);
-const isQueueLoading = ref(false);
-const simulationBusy = ref(false);
-
-async function loadQueueStatus() {
-  isQueueLoading.value = true;
-  try {
-    queueStatus.value = await apiRequest<QueueStatusResponse>('/api/fulfillment/queue-status');
-  } catch (err: any) {
-    console.warn('Failed to load queue status:', err);
-  } finally {
-    isQueueLoading.value = false;
-  }
-}
-
-async function runSimulationArrival(warehouseId?: string, productId?: string, qty = 5) {
-  const whId = warehouseId || warehouses.value.find((w) => w.status === 'active')?.id;
-  const prodId = productId || stockMatrix.value?.rows[0]?.productId;
-  if (!whId || !prodId) {
-    actionError.value = 'Need at least one active warehouse and product to simulate.';
-    return;
-  }
-  simulationBusy.value = true;
-  actionError.value = null;
-  try {
-    const res = await apiRequest<{ success: boolean; jobId: string }>('/api/warehouses/stock/arrival', {
-      method: 'POST',
-      data: {
-        warehouseId: whId,
-        productId: prodId,
-        quantityAdded: qty,
-        referenceNote: `Simulation stock arrival @ ${new Date().toLocaleTimeString()}`,
-      },
-    });
-    successMessage.value = `Simulation: Stock +${qty} arrival enqueued on BullMQ (Job #${res.jobId}). Backorder consolidation worker evaluated FIFO!`;
-    await Promise.all([loadStock(), loadBackordersAndPrompts(), loadQueueStatus()]);
-    setTimeout(() => {
-      if (successMessage.value?.startsWith('Simulation')) {
-        successMessage.value = null;
-      }
-    }, 4000);
-  } catch (err: any) {
-    actionError.value = err.message || 'Simulation failed';
-  } finally {
-    simulationBusy.value = false;
-  }
-}
-
-watch(activeTab, (tab) => {
-  if (tab === 'backorders' || tab === 'queue') {
-    loadBackordersAndPrompts();
-    loadQueueStatus();
-  }
-});
-
 // ---- Warehouse form ----
 const isWarehouseDialogOpen = ref(false);
 const editingWarehouseId = ref<string | null>(null);
@@ -363,7 +290,8 @@ async function loadAll() {
     warehouses.value = whRes.warehouses || [];
     stockMatrix.value = stockRes;
     shippingRules.value = { ...shippingRules.value, ...rulesRes.rules };
-    await Promise.all([loadBackordersAndPrompts(), loadQueueStatus()]);
+    await Promise.all([loadBackordersAndPrompts()]);
+    loadShippingOverrides();
   } catch (err: any) {
     actionError.value = err.message || 'Failed to load warehouses and inventory';
   } finally {
@@ -458,7 +386,26 @@ async function deleteWarehouse(wh: Warehouse) {
   }
 }
 
+// ---- Click a warehouse row to manage its stock levels ----
+const selectedWarehouseId = ref<string | null>(null);
+
+const visibleStockWarehouses = computed(() => {
+  if (!stockMatrix.value) return [];
+  if (!selectedWarehouseId.value) return stockMatrix.value.warehouses;
+  return stockMatrix.value.warehouses.filter((w) => w.id === selectedWarehouseId.value);
+});
+
+function openWarehouseStock(warehouseId: string) {
+  selectedWarehouseId.value = warehouseId;
+  handleTabChange('stock');
+}
+
 // ---- Stock adjustments ----
+function warehouseWorth(warehouseId: string): string {
+  const wh = stockMatrix.value?.warehouses.find((w) => w.id === warehouseId);
+  return formatMoney(wh?.columnWorth ?? 0);
+}
+
 function stockToneClass(qty: number): string {
   if (qty <= 0) return 'text-red-600 dark:text-red-400 font-bold';
   if (qty < 5) return 'text-amber-600 dark:text-amber-400 font-semibold';
@@ -527,6 +474,89 @@ async function saveShippingRules() {
   }
 }
 
+// ---- Shipping rules ----
+const shippingScope = ref<'org' | 'customer' | 'warehouse'>('org');
+const shippingScopeTargetId = ref<string>('');
+const shippingOverrides = ref<any[]>([]);
+const shippingCustomers = ref<Array<{ id: string; name: string; email: string }>>([]);
+const shippingWarehousesList = ref<Array<{ id: string; name: string; code: string }>>([]);
+const canManageOverrides = computed(() =>
+  ['org_admin', 'manager', 'finance'].includes(authStore.state.user?.role || '')
+);
+
+async function loadShippingOverrides() {
+  try {
+    const data = await apiRequest<{
+      overrides: any[];
+      customers: Array<{ id: string; name: string; email: string }>;
+      warehouses: Array<{ id: string; name: string; code: string }>;
+    }>('/api/warehouses/shipping-rules/overrides');
+    shippingOverrides.value = data.overrides || [];
+    shippingCustomers.value = data.customers || [];
+    shippingWarehousesList.value = data.warehouses || [];
+  } catch {
+    // Overrides listing is non-fatal
+  }
+}
+
+function scopeTargetOptions(): Array<{ id: string; name: string; code?: string }> {
+  return shippingScope.value === 'customer'
+    ? shippingCustomers.value.map((c) => ({ id: c.id, name: c.name }))
+    : shippingWarehousesList.value;
+}
+
+async function saveScopedShippingRules() {
+  if (!shippingScopeTargetId.value) {
+    actionError.value = 'Select a customer or warehouse for the override.';
+    return;
+  }
+  isSaving.value = true;
+  actionError.value = null;
+  try {
+    await apiRequest('/api/warehouses/shipping-rules/overrides', {
+      method: 'PUT',
+      data: {
+        ...(shippingScope.value === 'customer'
+          ? { customerId: shippingScopeTargetId.value }
+          : { warehouseId: shippingScopeTargetId.value }),
+        allowSplitShipments: shippingRules.value.allowSplitShipments,
+        chargeForSplitShipments: shippingRules.value.chargeForSplitShipments,
+        deliveryExtensionDays: shippingRules.value.deliveryExtensionDays,
+        notes: shippingRules.value.notes || null,
+      },
+    });
+    successMessage.value =
+      shippingScope.value === 'customer'
+        ? 'Customer shipping rule override saved.'
+        : 'Warehouse shipping rule override saved.';
+    await loadShippingOverrides();
+  } catch (err: any) {
+    actionError.value = err.message || 'Failed to save the shipping rule override';
+  } finally {
+    isSaving.value = false;
+  }
+}
+
+async function deleteShippingOverride(id: string) {
+  if (!window.confirm('Remove this shipping rule override? The default rules will apply again.')) return;
+  try {
+    await apiRequest(`/api/warehouses/shipping-rules/overrides/${id}`, { method: 'DELETE' });
+    successMessage.value = 'Override removed — default rules apply again.';
+    await loadShippingOverrides();
+  } catch (err: any) {
+    actionError.value = err.message || 'Failed to remove the override';
+  }
+}
+
+function overrideTargetLabel(o: any): string {
+  if (o.customerId) {
+    const c = shippingCustomers.value.find((x) => x.id === o.customerId);
+    return `Customer: ${c?.name || o.customerId}`;
+  }
+  const w = shippingWarehousesList.value.find((x) => x.id === o.warehouseId);
+  return `Warehouse: ${w?.name || o.warehouseId}`;
+}
+
 // ---- Realtime inventory updates from other actors ----
 async function onInventoryUpdated(data: any) {
   if (!data) return;
@@ -551,23 +581,15 @@ onMounted(async () => {
       socket.on('inventory:updated', onInventoryUpdated);
       socket.on('fulfillment:backorder_prompt', () => {
         loadBackordersAndPrompts();
-        loadQueueStatus();
-      });
+          });
       socket.on('fulfillment:prompt_resolved', () => {
         loadBackordersAndPrompts();
-        loadQueueStatus();
-      });
+          });
       socketBound = true;
     }
   } catch (err) {
     console.warn('Socket setup for inventory failed:', err);
   }
-
-  pollInterval = setInterval(() => {
-    if (activeTab.value === 'queue') {
-      loadQueueStatus();
-    }
-  }, 4000);
 });
 
 onUnmounted(() => {
@@ -652,10 +674,6 @@ onUnmounted(() => {
             {{ consolidationPrompts.length }}
           </Badge>
         </TabsTrigger>
-        <TabsTrigger value="queue" class="flex items-center gap-1.5 text-xs">
-          <Activity class="w-3.5 h-3.5 text-emerald-500" />
-          Queue Health
-        </TabsTrigger>
         <TabsTrigger value="shipping" class="flex items-center gap-1.5 text-xs">
           <Truck class="w-3.5 h-3.5" />
           Shipping Rules
@@ -704,11 +722,17 @@ onUnmounted(() => {
                     <TableHead class="font-semibold text-xs">Location</TableHead>
                     <TableHead class="font-semibold text-xs">Status</TableHead>
                     <TableHead class="text-center font-semibold text-xs">Stock Records</TableHead>
+                    <TableHead class="text-right font-semibold text-xs">Stock Worth</TableHead>
                     <TableHead v-if="canEditWarehouses" class="text-right font-semibold text-xs">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow v-for="(wh, idx) in warehouses" :key="wh.id" class="hover:bg-muted/30">
+                  <TableRow
+                    v-for="(wh, idx) in warehouses"
+                    :key="wh.id"
+                    class="hover:bg-muted/30 cursor-pointer"
+                    @click="openWarehouseStock(wh.id)"
+                  >
                     <TableCell class="text-xs font-semibold text-muted-foreground">{{ idx + 1 }}</TableCell>
                     <TableCell>
                       <div class="flex items-center gap-2">
@@ -745,7 +769,10 @@ onUnmounted(() => {
                     <TableCell class="text-center text-xs text-muted-foreground">
                       {{ wh._count?.stockLevels ?? 0 }}
                     </TableCell>
-                    <TableCell v-if="canEditWarehouses" class="text-right">
+                    <TableCell class="text-right text-xs font-semibold text-foreground">
+                      {{ warehouseWorth(wh.id) }}
+                    </TableCell>
+                    <TableCell v-if="canEditWarehouses" class="text-right" @click.stop>
                       <div class="flex items-center justify-end gap-1.5">
                         <Button variant="ghost" size="sm" class="h-7 w-7 p-0" @click="openEditWarehouse(wh)">
                           <Pencil class="w-3.5 h-3.5 text-muted-foreground hover:text-primary" />
@@ -795,6 +822,14 @@ onUnmounted(() => {
                 {{ cellNotice }}
               </div>
             </div>
+            <div v-if="selectedWarehouseId" class="sm:col-span-full flex items-center gap-2 -mt-1 sm:justify-end">
+              <span class="text-2xs text-muted-foreground">
+                Showing stock for <span class="font-semibold text-foreground">{{ warehouses.find(w => w.id === selectedWarehouseId)?.name }}</span> — click another warehouse row to switch.
+              </span>
+              <Button variant="ghost" size="sm" class="h-6 text-2xs" @click="selectedWarehouseId = null">
+                Show all warehouses
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div v-if="isLoading" class="py-12 text-center text-muted-foreground text-sm">
@@ -824,7 +859,7 @@ onUnmounted(() => {
                   <TableRow class="bg-muted/50">
                     <TableHead class="font-semibold text-xs min-w-[200px]">Product</TableHead>
                     <TableHead
-                      v-for="wh in stockMatrix.warehouses"
+                      v-for="wh in visibleStockWarehouses"
                       :key="wh.id"
                       class="text-center font-semibold text-xs"
                     >
@@ -846,7 +881,7 @@ onUnmounted(() => {
                       <div class="text-2xs text-muted-foreground">{{ row.sku }}</div>
                     </TableCell>
                     <TableCell
-                      v-for="wh in stockMatrix.warehouses"
+                      v-for="wh in visibleStockWarehouses"
                       :key="wh.id"
                       class="text-center p-2"
                     >
@@ -869,9 +904,13 @@ onUnmounted(() => {
                       >
                         {{ row.quantities[wh.id] ?? 0 }}
                       </span>
+                      <div class="text-2xs text-muted-foreground mt-0.5">
+                        {{ formatMoney(row.worth[wh.id] ?? 0) }}
+                      </div>
                     </TableCell>
-                    <TableCell class="text-center text-xs font-bold text-foreground">
-                      {{ row.total }}
+                    <TableCell class="text-center">
+                      <div class="text-xs font-bold text-foreground">{{ row.total }}</div>
+                      <div class="text-2xs text-muted-foreground">{{ formatMoney(row.totalWorth ?? 0) }}</div>
                     </TableCell>
                   </TableRow>
                   <TableRow class="bg-muted/40">
@@ -879,12 +918,14 @@ onUnmounted(() => {
                     <TableCell
                       v-for="wh in stockMatrix.warehouses"
                       :key="'tot-' + wh.id"
-                      class="text-center text-xs font-bold text-foreground"
+                      class="text-center"
                     >
-                      {{ wh.columnTotal }}
+                      <div class="text-xs font-bold text-foreground">{{ wh.columnTotal }}</div>
+                      <div class="text-2xs text-muted-foreground">{{ formatMoney(wh.columnWorth ?? 0) }}</div>
                     </TableCell>
-                    <TableCell class="text-center text-xs font-bold text-primary">
-                      {{ stockMatrix.grandTotal }}
+                    <TableCell class="text-center">
+                      <div class="text-xs font-bold text-primary">{{ stockMatrix.grandTotal }}</div>
+                      <div class="text-2xs text-muted-foreground">{{ formatMoney(stockMatrix.grandTotalWorth ?? 0) }}</div>
                     </TableCell>
                   </TableRow>
                 </TableBody>
@@ -1108,186 +1149,7 @@ onUnmounted(() => {
         </Card>
       </TabsContent>
 
-      <!-- TAB: Queue Health & Worker Liveness (Phase 17) -->
-      <TabsContent value="queue" class="mt-4 space-y-4">
-        <!-- Worker Liveness Cards -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Card class="border-border bg-card shadow-xs">
-            <CardHeader class="pb-2 border-b border-border/70">
-              <div class="flex items-center justify-between">
-                <CardTitle class="text-xs font-semibold text-foreground flex items-center gap-2">
-                  <Activity class="w-4 h-4 text-emerald-500" />
-                  Backorder Consolidation Worker
-                </CardTitle>
-                <div class="flex items-center gap-1.5">
-                  <span class="relative flex h-2 w-2">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <Badge variant="outline" class="text-2xs uppercase bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300">
-                    {{ queueStatus?.workers?.backorder?.status || 'Online' }}
-                  </Badge>
-                </div>
-              </div>
-              <CardDescription class="text-2xs">
-                Evaluates pending backorders FIFO on stock arrivals; publishes real-time prompts.
-              </CardDescription>
-            </CardHeader>
-            <CardContent class="pt-3 space-y-2 text-xs">
-              <div class="flex items-center justify-between">
-                <span class="text-muted-foreground">Queue Name:</span>
-                <span class="font-mono text-2xs text-foreground bg-muted px-1.5 py-0.5 rounded">
-                  {{ queueStatus?.queues?.backorders?.queueName || 'org_backorder_consolidation' }}
-                </span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-muted-foreground">Worker Concurrency:</span>
-                <span class="font-semibold text-foreground">{{ queueStatus?.workers?.backorder?.concurrency ?? 5 }} concurrency</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-muted-foreground">Redis Connection:</span>
-                <span class="text-emerald-600 dark:text-emerald-400 font-medium">Connected</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card class="border-border bg-card shadow-xs">
-            <CardHeader class="pb-2 border-b border-border/70">
-              <div class="flex items-center justify-between">
-                <CardTitle class="text-xs font-semibold text-foreground flex items-center gap-2">
-                  <Cpu class="w-4 h-4 text-primary" />
-                  Approval Routing Worker
-                </CardTitle>
-                <div class="flex items-center gap-1.5">
-                  <span class="relative flex h-2 w-2">
-                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <Badge variant="outline" class="text-2xs uppercase bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300">
-                    {{ queueStatus?.workers?.approval?.status || 'Online' }}
-                  </Badge>
-                </div>
-              </div>
-              <CardDescription class="text-2xs">
-                Multi-tier approval workflows & threshold routing.
-              </CardDescription>
-            </CardHeader>
-            <CardContent class="pt-3 space-y-2 text-xs">
-              <div class="flex items-center justify-between">
-                <span class="text-muted-foreground">Queue Name:</span>
-                <span class="font-mono text-2xs text-foreground bg-muted px-1.5 py-0.5 rounded">
-                  {{ queueStatus?.queues?.approvals?.queueName || 'approval_routing' }}
-                </span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-muted-foreground">Worker Concurrency:</span>
-                <span class="font-semibold text-foreground">{{ queueStatus?.workers?.approval?.concurrency ?? 5 }} concurrency</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-muted-foreground">Redis Connection:</span>
-                <span class="text-emerald-600 dark:text-emerald-400 font-medium">Connected</span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <!-- BullMQ Queue Metrics Grid -->
-        <Card class="border-border bg-card shadow-xs">
-          <CardHeader class="pb-3 border-b border-border/70">
-            <div class="flex items-center justify-between">
-              <div>
-                <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Activity class="w-4 h-4 text-primary" />
-                  BullMQ Queue Depths & Health
-                </CardTitle>
-                <CardDescription class="text-xs">
-                  Real-time job queue counters for asynchronous background tasks.
-                </CardDescription>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                class="h-7 text-xs"
-                :disabled="isQueueLoading"
-                @click="loadQueueStatus"
-              >
-                <RefreshCw class="w-3 h-3 mr-1" :class="{ 'animate-spin': isQueueLoading }" />
-                Refresh
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent class="pt-4 space-y-4">
-            <div class="space-y-2">
-              <div class="text-xs font-semibold text-foreground">
-                Queue: <span class="font-mono text-primary">org_backorder_consolidation</span>
-              </div>
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div class="p-3 rounded-lg border border-border/80 bg-muted/30 text-center">
-                  <div class="text-2xs text-muted-foreground uppercase font-semibold">Waiting</div>
-                  <div class="text-xl font-bold text-blue-600 dark:text-blue-400 mt-1 font-mono">
-                    {{ queueStatus?.queues?.backorders?.counts?.waiting ?? 0 }}
-                  </div>
-                </div>
-                <div class="p-3 rounded-lg border border-border/80 bg-muted/30 text-center">
-                  <div class="text-2xs text-muted-foreground uppercase font-semibold">Active</div>
-                  <div class="text-xl font-bold text-amber-600 dark:text-amber-400 mt-1 font-mono">
-                    {{ queueStatus?.queues?.backorders?.counts?.active ?? 0 }}
-                  </div>
-                </div>
-                <div class="p-3 rounded-lg border border-border/80 bg-muted/30 text-center">
-                  <div class="text-2xs text-muted-foreground uppercase font-semibold">Completed</div>
-                  <div class="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1 font-mono">
-                    {{ queueStatus?.queues?.backorders?.counts?.completed ?? 0 }}
-                  </div>
-                </div>
-                <div class="p-3 rounded-lg border border-border/80 bg-muted/30 text-center">
-                  <div class="text-2xs text-muted-foreground uppercase font-semibold">Failed</div>
-                  <div class="text-xl font-bold text-muted-foreground mt-1 font-mono">
-                    {{ queueStatus?.queues?.backorders?.counts?.failed ?? 0 }}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Interactive Simulation Test Box -->
-            <div class="p-4 rounded-lg border border-dashed border-primary/40 bg-primary/5 space-y-3">
-              <div class="flex items-center justify-between">
-                <div class="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                  <Zap class="w-3.5 h-3.5 text-primary" />
-                  Live Worker Demonstration & Job Dispatch
-                </div>
-                <Badge variant="outline" class="text-2xs bg-primary/10 text-primary border-primary/30">
-                  Interactive Demo
-                </Badge>
-              </div>
-              <p class="text-2xs text-muted-foreground">
-                Dispatch an asynchronous stock arrival job into BullMQ to test worker pickup and FIFO consolidation evaluation.
-              </p>
-              <div class="flex flex-wrap items-center gap-2 pt-1">
-                <Button
-                  size="sm"
-                  class="h-8 text-xs font-semibold bg-primary text-primary-foreground shadow-xs"
-                  :disabled="simulationBusy"
-                  @click="() => runSimulationArrival()"
-                >
-                  <Zap class="w-3.5 h-3.5 mr-1" :class="{ 'animate-spin': simulationBusy }" />
-                  Simulate Stock Arrival (+5 Units)
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  class="h-8 text-xs"
-                  @click="() => openStockArrivalDialog()"
-                >
-                  <Plus class="w-3.5 h-3.5 mr-1" />
-                  Custom Stock Arrival
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </TabsContent>
-
-      <!-- TAB: Shipping Rules -->
+<!-- TAB: Shipping Rules -->
       <TabsContent value="shipping" class="mt-4 space-y-4">
         <Card class="border-border bg-card shadow-xs">
           <CardHeader class="pb-3 border-b border-border/70">
@@ -1374,6 +1236,80 @@ onUnmounted(() => {
                 class="w-full rounded-md border border-input bg-background p-2.5 text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring"
               ></textarea>
             </div>
+          </CardContent>
+        </Card>
+
+        <!-- Scoped overrides: per-customer / per-warehouse shipping rules -->
+        <Card class="border-border bg-card shadow-xs">
+          <CardHeader class="pb-3 border-b border-border/70">
+            <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
+              <Truck class="w-4 h-4 text-primary" />
+              Rule Overrides
+            </CardTitle>
+            <CardDescription class="text-xs">
+              Shipping rules can differ per customer and per warehouse. Overrides take priority over
+              the organization defaults above; split-warehouse shipments resolve rules per warehouse.
+            </CardDescription>
+          </CardHeader>
+          <CardContent class="pt-4 space-y-4" v-if="canManageOverrides">
+            <div class="flex flex-col sm:flex-row sm:items-end gap-3">
+              <div class="grid gap-1.5">
+                <Label class="text-xs font-semibold">Scope</Label>
+                <select
+                  v-model="shippingScope"
+                  class="h-9 text-xs bg-background border border-border rounded-md px-2 text-foreground"
+                >
+                  <option value="customer">Per Customer</option>
+                  <option value="warehouse">Per Warehouse</option>
+                </select>
+              </div>
+              <div class="grid gap-1.5 flex-1">
+                <Label class="text-xs font-semibold">
+                  {{ shippingScope === 'customer' ? 'Customer' : 'Warehouse' }}
+                </Label>
+                <select
+                  v-model="shippingScopeTargetId"
+                  class="h-9 text-xs bg-background border border-border rounded-md px-2 text-foreground"
+                >
+                  <option value="" disabled>Select…</option>
+                  <option v-for="opt in scopeTargetOptions()" :key="opt.id" :value="opt.id">
+                    {{ shippingScope === 'customer' ? opt.name : `${opt.name} (${opt.code})` }}
+                  </option>
+                </select>
+              </div>
+              <Button size="sm" :disabled="isSaving" @click="saveScopedShippingRules">
+                <Save class="w-3.5 h-3.5 mr-1.5" />
+                Save Override
+              </Button>
+            </div>
+
+            <div v-if="shippingOverrides.length > 0" class="space-y-2">
+              <div
+                v-for="o in shippingOverrides"
+                :key="o.id"
+                class="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2"
+              >
+                <div class="text-xs">
+                  <span class="font-semibold text-foreground">{{ overrideTargetLabel(o) }}</span>
+                  <span class="text-muted-foreground">
+                    — {{ o.allowSplitShipments ? 'split allowed' : 'no splits' }},
+                    {{ o.chargeForSplitShipments ? 'extra charge' : 'no extra charge' }},
+                    +{{ o.deliveryExtensionDays }}d delivery
+                  </span>
+                </div>
+                <Button variant="ghost" size="sm" class="h-7 text-2xs" @click="deleteShippingOverride(o.id)">
+                  Remove
+                </Button>
+              </div>
+            </div>
+            <p v-else class="text-2xs text-muted-foreground">
+              No overrides yet — all customers and warehouses use the organization defaults.
+            </p>
+          </CardContent>
+          <CardContent v-else class="pt-4">
+            <p class="text-2xs text-muted-foreground">
+              Only Org Admins, Managers, and Finance can manage shipping rule overrides.
+            </p>
           </CardContent>
         </Card>
       </TabsContent>

@@ -77,3 +77,36 @@ export function fulfillmentStatusLabel(
       return { label: status ? status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Unknown', class: 'bg-muted text-muted-foreground border-border' };
   }
 }
+
+export function invoiceStatusLabel(status: string | undefined | null): { label: string; class: string } {
+  switch (status) {
+    case 'paid':
+      return { label: 'Paid', class: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300' };
+    case 'issued':
+      return { label: 'Issued / Due', class: 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300' };
+    case 'draft':
+      return { label: 'Draft', class: 'bg-muted text-muted-foreground border-border' };
+    case 'partially_refunded':
+      return { label: 'Partially Refunded', class: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300' };
+    case 'refunded':
+      return { label: 'Refunded', class: 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-300' };
+    case 'void':
+      return { label: 'Void', class: 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-300' };
+    default:
+      return { label: status ? status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Unknown', class: 'bg-muted text-muted-foreground border-border' };
+  }
+}
+
+export function invoiceTypeLabel(type: string | undefined | null): string {
+  switch (type) {
+    case 'one_time':
+      return 'One-Time Products';
+    case 'subscription_cycle':
+      return 'Subscription Cycle';
+    case 'proration_adjustment':
+      return 'Proration Adjustment';
+    default:
+      return type ? type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Invoice';
+  }
+}
+

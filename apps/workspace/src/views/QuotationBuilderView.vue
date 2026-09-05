@@ -7,7 +7,7 @@ import RiskScoreBadge from '../components/quotations/RiskScoreBadge.vue';
 import AuditTrailTimeline from '../components/quotations/AuditTrailTimeline.vue';
 import { apiRequest } from '../lib/api';
 import { formatCurrency, marginTone } from '../lib/currency';
-import { statusLabel, billingLabel, fulfillmentStatusLabel } from '../lib/labels';
+import { statusLabel, billingLabel, fulfillmentStatusLabel, invoiceStatusLabel, invoiceTypeLabel } from '../lib/labels';
 import { getSocket } from '../lib/socket';
 import { authStore } from '../lib/auth';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
@@ -59,6 +59,11 @@ import {
   Zap,
   Clock,
   RefreshCw,
+  Receipt,
+  Calendar,
+  CreditCard,
+  Sliders,
+  ExternalLink,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -267,14 +272,12 @@ const isProcessingApproverAction = ref(false);
 // Customer Portal Magic Link State
 const isSendingToCustomer = ref(false);
 const isSendCustomerDialogOpen = ref(false);
-const generatedPortalUrl = ref<string | null>(null);
 const dispatchedRecipientEmail = ref<string | null>(null);
 
 async function handleSendToCustomer() {
   if (!quoteId.value) return;
   isSendingToCustomer.value = true;
   errorMessage.value = null;
-  generatedPortalUrl.value = null;
 
   try {
     const res = await apiRequest<{
@@ -286,11 +289,10 @@ async function handleSendToCustomer() {
       method: 'POST',
     });
 
-    generatedPortalUrl.value = res.portalUrl;
     dispatchedRecipientEmail.value = res.customerEmail;
     quotationStatus.value = res.status;
     isSendCustomerDialogOpen.value = true;
-    successMessage.value = `Quotation magic link dispatched to ${res.customerEmail}`;
+    successMessage.value = `Quotation emailed to ${res.customerEmail}`;
 
     await loadQuotation(quoteId.value);
     await loadAuditTrail(quoteId.value);
@@ -980,11 +982,10 @@ function restoreDispatchedPortalModal() {
   sessionStorage.removeItem('dealflow_dispatched_portal');
   if (!stored) return;
   try {
-    const dispatched = JSON.parse(stored) as { url: string; email: string };
-    generatedPortalUrl.value = dispatched.url;
+    const dispatched = JSON.parse(stored) as { url?: string; email: string };
     dispatchedRecipientEmail.value = dispatched.email;
     isSendCustomerDialogOpen.value = true;
-    successMessage.value = `Portal link emailed to ${dispatched.email} — all further communication happens through that link.`;
+    successMessage.value = `Quotation emailed to ${dispatched.email}`;
   } catch {
     // Ignore malformed payloads
   }
@@ -1264,12 +1265,58 @@ async function handleDismissPrompt(prompt: ConsolidationPromptView) {
   }
 }
 
+// Phase 18: Invoicing & Subscription Schedules
+const billingSummary = ref<any | null>(null);
+const isBillingLoading = ref(false);
+const isBillingBusy = ref(false);
+const billingError = ref<string | null>(null);
+const billingNotice = ref<string | null>(null);
+
+async function loadBilling() {
+  if (!quoteId.value) return;
+  isBillingLoading.value = true;
+  billingError.value = null;
+  try {
+    billingSummary.value = await apiRequest<any>(`/api/billing/quotations/${quoteId.value}/summary`);
+  } catch (err: any) {
+    billingSummary.value = null;
+  } finally {
+    isBillingLoading.value = false;
+  }
+}
+
+async function handleConfirmAndSplit() {
+  if (!quoteId.value) return;
+  if (!window.confirm('Confirm this quotation? This will split one-time items into an immediate invoice and activate subscriptions with recurring schedules.')) {
+    return;
+  }
+  isBillingBusy.value = true;
+  billingError.value = null;
+  try {
+    await apiRequest(`/api/quotations/${quoteId.value}/confirm`, {
+      method: 'POST',
+      body: '{}',
+    });
+    billingNotice.value = 'Quotation confirmed! Invoices and subscription schedules generated.';
+    await loadQuotation(quoteId.value);
+    await loadBilling();
+    setTimeout(() => {
+      if (billingNotice.value?.includes('confirmed')) billingNotice.value = null;
+    }, 4000);
+  } catch (err: any) {
+    billingError.value = err.message || 'Failed to confirm and split order';
+  } finally {
+    isBillingBusy.value = false;
+  }
+}
+
 onMounted(() => {
   loadInitialData();
 
   if (isEditMode.value) {
     loadNegotiation();
     loadFulfillment();
+    loadBilling();
     restoreDispatchedPortalModal();
   }
 
@@ -1318,6 +1365,14 @@ onMounted(() => {
         loadFulfillment();
       }
     });
+
+    // Phase 18: live billing updates
+    socket.on('billing:updated', (data: any) => {
+      if (data && quoteId.value && data.quotationId === quoteId.value) {
+        loadBilling();
+        loadQuotation(quoteId.value);
+      }
+    });
   } catch (err) {
     console.warn('Socket connection setup error:', err);
   }
@@ -1336,6 +1391,7 @@ onUnmounted(() => {
     socket.off('fulfillment:updated');
     socket.off('fulfillment:backorder_prompt');
     socket.off('fulfillment:prompt_resolved');
+    socket.off('billing:updated');
   } catch {
     // Non-fatal
   }
@@ -1368,7 +1424,7 @@ onUnmounted(() => {
           </div>
           <h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
             <FileText class="w-6 h-6 text-primary" />
-            {{ isEditMode ? `Edit Quote — ${quotationNumber}` : 'Quotation Builder (Stage 2)' }}
+            {{ isEditMode ? `Edit Quote — ${quotationNumber}` : 'Quotation Builder' }}
           </h1>
         </div>
 
@@ -2194,6 +2250,178 @@ onUnmounted(() => {
               </div>
             </CardContent>
           </Card>
+
+          <!-- Stage 5: Invoicing & Subscription Schedules (Phase 18) -->
+          <Card v-if="isEditMode" class="border-border bg-card shadow-xs">
+            <CardHeader class="pb-3 border-b border-border/70">
+              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div class="space-y-1">
+                  <div class="flex items-center gap-2">
+                    <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <Receipt class="w-4 h-4 text-primary" />
+                      Invoicing & Subscriptions
+                    </CardTitle>
+                    <Badge
+                      v-if="quotationStatus === 'confirmed'"
+                      variant="outline"
+                      class="text-3xs uppercase bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300 font-semibold"
+                    >
+                      Confirmed & Active
+                    </Badge>
+                  </div>
+                  <CardDescription class="text-xs">
+                    Order splitting separates one-time physical/service items from recurring SaaS subscriptions.
+                  </CardDescription>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Button
+                    v-if="['draft', 'in_review', 'approved', 'sent'].includes(quotationStatus)"
+                    size="sm"
+                    class="h-8 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white"
+                    :disabled="isBillingBusy"
+                    @click="handleConfirmAndSplit"
+                  >
+                    <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
+                    {{ isBillingBusy ? 'Confirming...' : 'Confirm & Split Order' }}
+                  </Button>
+                  <router-link
+                    to="/billing"
+                    class="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium"
+                  >
+                    Open Billing Hub
+                    <ExternalLink class="w-3.5 h-3.5" />
+                  </router-link>
+                </div>
+              </div>
+            </CardHeader>
+
+            <CardContent class="space-y-4 pt-4 text-xs">
+              <div v-if="billingNotice" class="p-2.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 text-emerald-800 dark:text-emerald-200 text-2xs flex items-start gap-1.5">
+                <CheckCircle2 class="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{{ billingNotice }}</span>
+              </div>
+              <div v-if="billingError" class="p-2.5 rounded-md bg-destructive/10 border border-destructive/30 text-destructive text-2xs flex items-start gap-1.5">
+                <AlertTriangle class="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{{ billingError }}</span>
+              </div>
+
+              <!-- Revenue Split Summary -->
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div class="p-3 rounded-lg bg-muted/40 border border-border">
+                  <div class="text-2xs text-muted-foreground uppercase font-semibold">One-Time Upfront</div>
+                  <div class="text-base font-bold text-foreground mt-0.5">{{ formatCurrency(totals.oneTimeTotal) }}</div>
+                  <div class="text-3xs text-muted-foreground mt-1">Billed on order confirmation</div>
+                </div>
+                <div class="p-3 rounded-lg bg-muted/40 border border-border">
+                  <div class="text-2xs text-muted-foreground uppercase font-semibold">Monthly MRR</div>
+                  <div class="text-base font-bold text-primary mt-0.5">{{ formatCurrency(totals.recurringMonthlyTotal) }}/mo</div>
+                  <div class="text-3xs text-muted-foreground mt-1">Multi-period recurring schedule</div>
+                </div>
+                <div class="p-3 rounded-lg bg-muted/40 border border-border">
+                  <div class="text-2xs text-muted-foreground uppercase font-semibold">Annual ARR</div>
+                  <div class="text-base font-bold text-primary mt-0.5">{{ formatCurrency(totals.recurringAnnualTotal) }}/yr</div>
+                  <div class="text-3xs text-muted-foreground mt-1">Auto-renewing annual schedule</div>
+                </div>
+              </div>
+
+              <!-- Invoices Section -->
+              <div v-if="billingSummary?.invoices?.length" class="space-y-2">
+                <div class="font-semibold text-xs text-foreground flex items-center justify-between">
+                  <span class="flex items-center gap-1.5">
+                    <Receipt class="w-3.5 h-3.5 text-primary" />
+                    Issued Invoices ({{ billingSummary.invoices.length }})
+                  </span>
+                </div>
+                <div class="rounded-md border border-border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow class="bg-muted/40 text-2xs">
+                        <TableHead class="font-semibold">Invoice #</TableHead>
+                        <TableHead class="font-semibold">Type</TableHead>
+                        <TableHead class="font-semibold">Issued Date</TableHead>
+                        <TableHead class="font-semibold">Due Date</TableHead>
+                        <TableHead class="text-right font-semibold">Total Amount</TableHead>
+                        <TableHead class="text-center font-semibold">Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow v-for="inv in billingSummary.invoices" :key="inv.id" class="text-xs">
+                        <TableCell class="font-mono font-bold text-primary">
+                          {{ inv.invoiceNumber }}
+                        </TableCell>
+                        <TableCell class="capitalize text-muted-foreground text-2xs">
+                          {{ inv.type.replace('_', ' ') }}
+                        </TableCell>
+                        <TableCell class="text-muted-foreground text-2xs">
+                          {{ new Date(inv.issuedAt).toLocaleDateString() }}
+                        </TableCell>
+                        <TableCell class="text-muted-foreground text-2xs">
+                          {{ new Date(inv.dueDate).toLocaleDateString() }}
+                        </TableCell>
+                        <TableCell class="text-right font-semibold font-mono">
+                          {{ formatCurrency(inv.totalAmount) }}
+                        </TableCell>
+                        <TableCell class="text-center">
+                          <Badge
+                            variant="outline"
+                            class="text-3xs uppercase font-semibold"
+                            :class="inv.status === 'paid'
+                              ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300'
+                              : inv.status === 'posted'
+                                ? 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300'
+                                : 'bg-muted text-muted-foreground'"
+                          >
+                            {{ inv.status }}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+
+              <!-- Subscriptions Section -->
+              <div v-if="billingSummary?.subscriptions?.length" class="space-y-2">
+                <div class="font-semibold text-xs text-foreground flex items-center justify-between">
+                  <span class="flex items-center gap-1.5">
+                    <Calendar class="w-3.5 h-3.5 text-primary" />
+                    Active Subscriptions ({{ billingSummary.subscriptions.length }})
+                  </span>
+                </div>
+                <div class="space-y-2">
+                  <div
+                    v-for="sub in billingSummary.subscriptions"
+                    :key="sub.id"
+                    class="p-3 rounded-lg border border-border bg-card space-y-2"
+                  >
+                    <div class="flex items-center justify-between">
+                      <div>
+                        <span class="font-semibold text-foreground">{{ sub.product?.name }}</span>
+                        <span class="text-2xs text-muted-foreground font-mono ml-2">{{ sub.subscriptionNumber }}</span>
+                      </div>
+                      <Badge variant="outline" class="text-3xs uppercase font-bold text-primary">
+                        {{ sub.status }}
+                      </Badge>
+                    </div>
+                    <div class="flex flex-wrap gap-4 text-2xs text-muted-foreground">
+                      <span>Frequency: <strong class="text-foreground capitalize">{{ sub.billingFrequency }}</strong></span>
+                      <span>Qty: <strong class="text-foreground">{{ sub.quantity }}</strong></span>
+                      <span>Recurring: <strong class="text-foreground font-mono">{{ formatCurrency(sub.recurringAmount) }}</strong></span>
+                      <span>Next Bill: <strong class="text-foreground">{{ sub.nextBillingAt ? new Date(sub.nextBillingAt).toLocaleDateString() : 'N/A' }}</strong></span>
+                      <span>Schedules: <strong class="text-foreground">{{ sub.schedules?.length || 0 }} periods generated</strong></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                v-if="!billingSummary?.invoices?.length && !billingSummary?.subscriptions?.length"
+                class="text-xs text-muted-foreground text-center py-4 border border-dashed border-border rounded-md"
+              >
+                No invoices or subscriptions yet — confirming the quotation will automatically split one-time charges and create recurring schedules.
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         <!-- RIGHT COLUMN: Customer Request, Tier & Pricing Breakdown Card (4 cols) -->
@@ -2679,41 +2907,22 @@ onUnmounted(() => {
         </DialogContent>
       </Dialog>
 
-      <!-- CUSTOMER MAGIC LINK DISPATCHED MODAL -->
+      <!-- MAIL SENT CONFIRMATION MODAL -->
       <Dialog :open="isSendCustomerDialogOpen" @update:open="isSendCustomerDialogOpen = $event">
-        <DialogContent class="sm:max-w-lg">
+        <DialogContent class="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle class="text-base flex items-center gap-2 text-emerald-600">
               <CheckCircle2 class="w-5 h-5 text-emerald-600" />
-              Customer Magic Link Dispatched!
+              Mail Sent
             </DialogTitle>
             <DialogDescription class="text-xs">
-              The quotation review invitation has been sent via email to <strong>{{ dispatchedRecipientEmail }}</strong>.
+              The quotation has been emailed to <strong>{{ dispatchedRecipientEmail }}</strong>.
             </DialogDescription>
           </DialogHeader>
 
-          <div class="space-y-4 py-2 text-xs">
-            <div class="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/40 dark:border-emerald-900 p-3 text-xs text-emerald-800 dark:text-emerald-300 space-y-1">
-              <span class="font-semibold block">One Link, One Channel:</span>
-              <p>
-                The customer reviews, comments, counters discounts, and confirms the
-                deal — all through the link we just emailed them. You'll see every
-                message live in the Customer Negotiation panel below.
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter class="flex sm:justify-between items-center gap-2">
-            <a
-              :href="generatedPortalUrl || '#'"
-              target="_blank"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-semibold text-primary hover:bg-muted"
-            >
-              <ExternalLink class="w-3.5 h-3.5" />
-              Open Customer Portal
-            </a>
+          <DialogFooter>
             <Button size="sm" @click="isSendCustomerDialogOpen = false">
-              Done
+              Okay
             </Button>
           </DialogFooter>
         </DialogContent>

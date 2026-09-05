@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 import { platformService } from './platform.service.js';
+import { paymentsService } from '../billing/payments.service.js';
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -127,6 +128,39 @@ export class PlatformController {
       const limit = req.query.limit ? Number(req.query.limit) : 100;
       const logs = await platformService.getOrganizationAuditLogs(id, limit);
       res.json({ data: logs });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async listPlatformDlq(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { status, queueName } = req.query;
+      const jobs = await paymentsService.listDlqJobs({
+        status: status as string | undefined,
+        queueName: queueName as string | undefined,
+      });
+      res.json({ data: jobs });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async retryPlatformDlq(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = req.params.id!;
+      const result = await paymentsService.retryDlqJob(id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async dismissPlatformDlq(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = req.params.id!;
+      const result = await paymentsService.dismissDlqJob(id);
+      res.json(result);
     } catch (err) {
       next(err);
     }

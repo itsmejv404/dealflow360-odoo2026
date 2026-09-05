@@ -179,6 +179,21 @@ export class QuotationsController {
 
     return res.json(result);
   }
+
+  async confirmQuotation(req: Request, res: Response) {
+    const orgId = req.tenant!.orgId;
+    const { id } = req.params;
+    if (!id) {
+      throw new HttpError(400, 'Quotation ID required');
+    }
+    const tenant = req.tenant!;
+    const quotation = await quotationsService.confirmQuotation(orgId, id, {
+      userId: tenant.userId,
+      email: tenant.email,
+      role: tenant.role,
+    });
+    return res.json({ quotation });
+  }
 }
 
 export const quotationsController = new QuotationsController();
