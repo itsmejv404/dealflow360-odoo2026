@@ -661,6 +661,24 @@ async function handleSaveQuotation() {
         body: JSON.stringify(payload),
       });
       successMessage.value = `Quotation ${res.quotation.quotationNumber} created successfully`;
+
+      // New-customer flow: the portal access link is dispatched automatically —
+      // all further communication happens through the customer's portal link.
+      if (route.query.newCustomer === '1') {
+        try {
+          const sendRes = await apiRequest<{ portalUrl: string; customerEmail: string }>(
+            `/api/portal/send/${res.quotation.id}`,
+            { method: 'POST', body: '{}' }
+          );
+          sessionStorage.setItem(
+            'dealflow_dispatched_portal',
+            JSON.stringify({ url: sendRes.portalUrl, email: sendRes.customerEmail })
+          );
+        } catch (err: any) {
+          errorMessage.value = `Quotation saved, but the portal link email failed (${err.message || 'unknown error'}). Use "Send to Customer" to retry.`;
+        }
+      }
+
       router.push(`/quotations/${res.quotation.id}`);
     }
   } catch (err: any) {
@@ -739,24 +757,117 @@ const negotiationNotice = ref<string | null>(null);
 const canManageNegotiation = computed(() =>
   ['manager', 'org_admin'].includes(authStore.state.user?.role || '')
 );
-const negotiationComments = computed(() => negotiationData.value?.comments ?? []);
 const openCounters = computed(
   () => negotiationData.value?.counterProposals?.filter((c: any) => c.status === 'open') ?? []
-);
-const decidedCounters = computed(
-  () => negotiationData.value?.counterProposals?.filter((c: any) => c.status !== 'open') ?? []
 );
 const openChangeRequests = computed(
   () => negotiationData.value?.changeRequests?.filter((c: any) => c.status === 'open') ?? []
 );
-const decidedChangeRequests = computed(
-  () => negotiationData.value?.changeRequests?.filter((c: any) => c.status !== 'open') ?? []
-);
+
+/**
+ * Unified chat timeline: comments, counter-proposals and change requests
+ * merged chronologically — the rep sees the negotiation exactly as a
+ * conversation, with deal actions embedded as cards in the thread.
+ */
+type NegotiationTimelineItem =
+  | {
+      kind: 'comment';
+      id: string;
+      createdAt: string;
+      authorType: 'customer' | 'internal';
+      authorName: string;
+      body: string;
+      line: { productId?: string } | null;
+    }
+  | {
+      kind: 'counter';
+      id: string;
+      createdAt: string;
+      proposedDiscountPercent: string;
+      note: string | null;
+      status: string;
+      decisionNote: string | null;
+      line: { productId?: string } | null;
+    }
+  | {
+      kind: 'change';
+      id: string;
+      createdAt: string;
+      requestType: string;
+      proposedQuantity: number | null;
+      proposedDiscountPercent: string | null;
+      note: string | null;
+      status: string;
+      resolutionNote: string | null;
+      line: { productId?: string } | null;
+    };
+
+const negotiationTimeline = computed<NegotiationTimelineItem[]>(() => {
+  const data = negotiationData.value;
+  if (!data) return [];
+  const items: NegotiationTimelineItem[] = [];
+
+  for (const c of data.comments ?? []) {
+    items.push({
+      kind: 'comment',
+      id: c.id,
+      createdAt: c.createdAt,
+      authorType: c.authorType,
+      authorName: c.authorName,
+      body: c.body,
+      line: c.line ?? null,
+    });
+  }
+  for (const cp of data.counterProposals ?? []) {
+    items.push({
+      kind: 'counter',
+      id: cp.id,
+      createdAt: cp.createdAt,
+      proposedDiscountPercent: cp.proposedDiscountPercent,
+      note: cp.note,
+      status: cp.status,
+      decisionNote: cp.decisionNote,
+      line: cp.line ?? null,
+    });
+  }
+  for (const cr of data.changeRequests ?? []) {
+    items.push({
+      kind: 'change',
+      id: cr.id,
+      createdAt: cr.createdAt,
+      requestType: cr.requestType,
+      proposedQuantity: cr.proposedQuantity,
+      proposedDiscountPercent: cr.proposedDiscountPercent,
+      note: cr.note,
+      status: cr.status,
+      resolutionNote: cr.resolutionNote,
+      line: cr.line ?? null,
+    });
+  }
+
+  return items.sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+});
 
 function negotiationLineLabel(line: { productId?: string } | null | undefined): string {
   if (!line?.productId) return 'General';
   const l = lines.value.find((x) => x.productId === line.productId);
   return l?.product?.name ? String(l.product.name) : 'Line item';
+}
+
+function isThreadItemFromTeam(item: NegotiationTimelineItem): boolean {
+  return item.kind === 'comment' && item.authorType === 'internal';
+}
+
+function threadItemAuthor(item: NegotiationTimelineItem): string {
+  if (item.kind === 'comment') return item.authorName || 'Team';
+  return negotiationData.value?.quotation?.customerName || 'Customer';
+}
+
+function threadItemAvatar(item: NegotiationTimelineItem): string {
+  if (item.kind === 'comment') return (item.authorName || '?').substring(0, 2).toUpperCase();
+  return (negotiationData.value?.quotation?.customerName || 'CU').substring(0, 2).toUpperCase();
 }
 
 async function loadNegotiation() {
@@ -861,11 +972,34 @@ function negotiationRequestBadge(status: string): { label: string; class: string
   }
 }
 
+/**
+ * After the new-customer auto-send, the builder re-routes with ?dispatched=1 —
+ * restore the "link dispatched" modal once (the flag is stripped immediately so
+ * a refresh never re-triggers it).
+ */
+function restoreDispatchedPortalModal() {
+  if (route.query.dispatched !== '1') return;
+  router.replace({ path: route.path });
+  const stored = sessionStorage.getItem('dealflow_dispatched_portal');
+  sessionStorage.removeItem('dealflow_dispatched_portal');
+  if (!stored) return;
+  try {
+    const dispatched = JSON.parse(stored) as { url: string; email: string };
+    generatedPortalUrl.value = dispatched.url;
+    dispatchedRecipientEmail.value = dispatched.email;
+    isSendCustomerDialogOpen.value = true;
+    successMessage.value = `Portal link emailed to ${dispatched.email} — all further communication happens through that link.`;
+  } catch {
+    // Ignore malformed payloads
+  }
+}
+
 onMounted(() => {
   loadInitialData();
 
   if (isEditMode.value) {
     loadNegotiation();
+    restoreDispatchedPortalModal();
   }
 
   // Socket.IO realtime connection & listener
@@ -1329,7 +1463,8 @@ onUnmounted(() => {
                     </Badge>
                   </CardTitle>
                   <CardDescription class="text-xs">
-                    Live thread from the customer portal — counters, change requests and comments.
+                    Chat with the customer from their portal — refine the quote over as many
+                    review rounds as needed, then let them close the deal.
                   </CardDescription>
                 </div>
                 <Button
@@ -1348,41 +1483,138 @@ onUnmounted(() => {
               <div v-if="negotiationError" class="p-2 rounded-md bg-destructive/10 text-destructive text-xs">{{ negotiationError }}</div>
               <div v-if="negotiationNotice" class="p-2 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs">{{ negotiationNotice }}</div>
 
-              <!-- Comments thread -->
-              <div class="space-y-2 max-h-60 overflow-y-auto pr-1">
-                <div v-if="negotiationComments.length === 0" class="text-xs text-muted-foreground text-center py-4 border border-dashed border-border rounded-md">
-                  No customer messages yet.
+              <!-- Merged negotiation chat: comments + counters + change requests in one thread -->
+              <div class="space-y-3 max-h-96 overflow-y-auto pr-1">
+                <div v-if="negotiationTimeline.length === 0" class="text-xs text-muted-foreground text-center py-6 border border-dashed border-border rounded-md">
+                  <MessagesSquare class="w-5 h-5 mx-auto text-muted-foreground/60 mb-1.5" />
+                  The negotiation thread is empty — customer messages, counters and change requests appear here.
                 </div>
+
                 <div
-                  v-for="c in negotiationComments"
-                  :key="c.id"
+                  v-for="item in negotiationTimeline"
+                  :key="item.kind + '-' + item.id"
                   class="flex gap-2"
-                  :class="c.authorType === 'internal' ? 'flex-row-reverse' : ''"
+                  :class="isThreadItemFromTeam(item) ? 'flex-row-reverse' : ''"
                 >
                   <div
                     class="size-6 rounded-md grid place-items-center text-[9px] font-bold shrink-0"
-                    :class="c.authorType === 'customer' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
+                    :class="isThreadItemFromTeam(item) ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
                   >
-                    {{ (c.authorName || '?').substring(0, 2).toUpperCase() }}
+                    {{ threadItemAvatar(item) }}
                   </div>
-                  <div class="max-w-[85%]">
+
+                  <div class="max-w-[88%] space-y-0.5">
+                    <!-- Meta line -->
                     <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                      <span class="font-semibold text-foreground">{{ c.authorName }}</span>
-                      <span>{{ c.authorType === 'customer' ? 'Customer' : 'Team' }}</span>
-                      <span v-if="c.lineId" class="px-1.5 py-0.5 rounded bg-muted border border-border">{{ negotiationLineLabel(c.line) }}</span>
+                      <span class="font-semibold text-foreground">{{ threadItemAuthor(item) }}</span>
+                      <span>{{ isThreadItemFromTeam(item) ? 'Team' : 'Customer' }}</span>
+                      <span v-if="item.line" class="px-1.5 py-0.5 rounded bg-muted border border-border">{{ negotiationLineLabel(item.line) }}</span>
+                      <span class="ml-auto">{{ new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
                     </div>
+
+                    <!-- Comment bubble -->
                     <div
+                      v-if="item.kind === 'comment'"
                       class="px-2.5 py-1.5 rounded-lg text-xs mt-0.5"
-                      :class="c.authorType === 'customer' ? 'bg-muted text-foreground' : 'bg-primary/10 text-foreground'"
+                      :class="isThreadItemFromTeam(item) ? 'bg-primary/10 text-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm'"
                     >
-                      {{ c.body }}
+                      {{ item.body }}
+                    </div>
+
+                    <!-- Counter-proposal card -->
+                    <div
+                      v-else-if="item.kind === 'counter'"
+                      class="p-2.5 rounded-lg border text-xs mt-0.5 space-y-2"
+                      :class="item.status === 'open'
+                        ? 'border-amber-300/60 bg-amber-50 dark:bg-amber-950/40'
+                        : 'border-border bg-muted/30 opacity-80'"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="font-semibold text-foreground">
+                          <ArrowLeftRight class="w-3.5 h-3.5 inline mr-1 text-primary" />
+                          Counter-discount: <span class="text-primary font-bold">{{ Number(item.proposedDiscountPercent) }}%</span>
+                          {{ item.line ? `on ${negotiationLineLabel(item.line)}` : 'on the whole order' }}
+                        </div>
+                        <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0" :class="negotiationRequestBadge(item.status).class">
+                          {{ negotiationRequestBadge(item.status).label }}
+                        </span>
+                      </div>
+                      <p v-if="item.note" class="text-muted-foreground italic">"{{ item.note }}"</p>
+                      <p v-if="item.decisionNote" class="text-[10px] text-muted-foreground">Response: "{{ item.decisionNote }}"</p>
+                      <div v-if="item.status === 'open' && canManageNegotiation" class="flex gap-2">
+                        <Button
+                          size="sm"
+                          class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                          :disabled="negotiationBusyId === item.id"
+                          @click="resolveCounter(item.id, 'accept')"
+                        >
+                          <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
+                          Accept (updates terms)
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          class="h-7 text-xs"
+                          :disabled="negotiationBusyId === item.id"
+                          @click="resolveCounter(item.id, 'decline')"
+                        >
+                          <XCircle class="w-3.5 h-3.5 mr-1" />
+                          Decline
+                        </Button>
+                      </div>
+                      <p v-else-if="item.status === 'open'" class="text-[10px] text-muted-foreground">Waiting for a manager or org admin to decide.</p>
+                    </div>
+
+                    <!-- Change-request card -->
+                    <div
+                      v-else
+                      class="p-2.5 rounded-lg border text-xs mt-0.5 space-y-2"
+                      :class="item.status === 'open'
+                        ? 'border-sky-300/60 bg-sky-50 dark:bg-sky-950/40'
+                        : 'border-border bg-muted/30 opacity-80'"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="font-semibold text-foreground capitalize">
+                          <FileEdit class="w-3.5 h-3.5 inline mr-1 text-primary" />
+                          {{ item.requestType.replace('_', ' ') }}
+                          <template v-if="item.proposedQuantity"> → qty {{ item.proposedQuantity }}</template>
+                          <template v-if="item.proposedDiscountPercent"> → {{ Number(item.proposedDiscountPercent) }}%</template>
+                        </div>
+                        <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0" :class="negotiationRequestBadge(item.status).class">
+                          {{ negotiationRequestBadge(item.status).label }}
+                        </span>
+                      </div>
+                      <p v-if="item.note" class="text-muted-foreground italic">"{{ item.note }}"</p>
+                      <p v-if="item.resolutionNote" class="text-[10px] text-muted-foreground">Response: "{{ item.resolutionNote }}"</p>
+                      <div v-if="item.status === 'open' && canManageNegotiation" class="flex gap-2">
+                        <Button
+                          size="sm"
+                          class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                          :disabled="negotiationBusyId === item.id"
+                          @click="resolveChangeRequest(item.id, 'accept')"
+                        >
+                          <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
+                          Accept (updates terms)
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          class="h-7 text-xs"
+                          :disabled="negotiationBusyId === item.id"
+                          @click="resolveChangeRequest(item.id, 'decline')"
+                        >
+                          <XCircle class="w-3.5 h-3.5 mr-1" />
+                          Decline
+                        </Button>
+                      </div>
+                      <p v-else-if="item.status === 'open'" class="text-[10px] text-muted-foreground">Waiting for a manager or org admin to decide.</p>
                     </div>
                   </div>
                 </div>
               </div>
 
               <!-- Internal reply -->
-              <div class="flex gap-2">
+              <div class="flex gap-2 pt-1 border-t border-border/70">
                 <Input
                   v-model="negotiationComment"
                   placeholder="Reply to the customer..."
@@ -1397,111 +1629,6 @@ onUnmounted(() => {
                 >
                   Reply
                 </Button>
-              </div>
-
-              <!-- Open counter-proposals -->
-              <div v-if="openCounters.length > 0" class="space-y-2 pt-2 border-t border-border/70">
-                <div class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Counter-Discount Proposals</div>
-                <div
-                  v-for="cp in openCounters"
-                  :key="cp.id"
-                  class="p-3 rounded-lg border border-amber-300/60 bg-amber-50 dark:bg-amber-950/40 space-y-2"
-                >
-                  <div class="flex items-center justify-between gap-2 text-xs">
-                    <div class="font-semibold text-foreground">
-                      Customer proposes <span class="text-primary font-bold">{{ Number(cp.proposedDiscountPercent) }}%</span>
-                      {{ cp.lineId ? `on ${negotiationLineLabel(cp.line)}` : 'on the whole order' }}
-                    </div>
-                    <span class="text-[10px] text-muted-foreground">{{ new Date(cp.createdAt).toLocaleString() }}</span>
-                  </div>
-                  <p v-if="cp.note" class="text-xs text-muted-foreground italic">"{{ cp.note }}"</p>
-                  <div v-if="canManageNegotiation" class="flex gap-2">
-                    <Button
-                      size="sm"
-                      class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
-                      :disabled="negotiationBusyId === cp.id"
-                      @click="resolveCounter(cp.id, 'accept')"
-                    >
-                      <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
-                      Accept (updates terms)
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      class="h-7 text-xs"
-                      :disabled="negotiationBusyId === cp.id"
-                      @click="resolveCounter(cp.id, 'decline')"
-                    >
-                      <XCircle class="w-3.5 h-3.5 mr-1" />
-                      Decline
-                    </Button>
-                  </div>
-                  <p v-else class="text-[10px] text-muted-foreground">Waiting for a manager or org admin to decide.</p>
-                </div>
-              </div>
-
-              <!-- Open change requests -->
-              <div v-if="openChangeRequests.length > 0" class="space-y-2 pt-2 border-t border-border/70">
-                <div class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Change Requests</div>
-                <div
-                  v-for="cr in openChangeRequests"
-                  :key="cr.id"
-                  class="p-3 rounded-lg border border-sky-300/60 bg-sky-50 dark:bg-sky-950/40 space-y-2"
-                >
-                  <div class="flex items-center justify-between gap-2 text-xs">
-                    <div class="font-semibold text-foreground capitalize">
-                      {{ cr.requestType.replace('_', ' ') }}
-                      <template v-if="cr.lineId"> — {{ negotiationLineLabel(cr.line) }}</template>
-                      <template v-if="cr.proposedQuantity"> → qty {{ cr.proposedQuantity }}</template>
-                      <template v-if="cr.proposedDiscountPercent"> → {{ Number(cr.proposedDiscountPercent) }}%</template>
-                    </div>
-                    <span class="text-[10px] text-muted-foreground">{{ new Date(cr.createdAt).toLocaleString() }}</span>
-                  </div>
-                  <p v-if="cr.note" class="text-xs text-muted-foreground italic">"{{ cr.note }}"</p>
-                  <div v-if="canManageNegotiation" class="flex gap-2">
-                    <Button
-                      size="sm"
-                      class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
-                      :disabled="negotiationBusyId === cr.id"
-                      @click="resolveChangeRequest(cr.id, 'accept')"
-                    >
-                      <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
-                      Accept (updates terms)
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      class="h-7 text-xs"
-                      :disabled="negotiationBusyId === cr.id"
-                      @click="resolveChangeRequest(cr.id, 'decline')"
-                    >
-                      <XCircle class="w-3.5 h-3.5 mr-1" />
-                      Decline
-                    </Button>
-                  </div>
-                  <p v-else class="text-[10px] text-muted-foreground">Waiting for a manager or org admin to decide.</p>
-                </div>
-              </div>
-
-              <!-- Resolved history -->
-              <div v-if="decidedCounters.length + decidedChangeRequests.length > 0" class="pt-2 border-t border-border/70 space-y-1.5">
-                <div class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Resolved Negotiation History</div>
-                <div v-for="cp in decidedCounters" :key="'cp-' + cp.id" class="flex items-center justify-between gap-2 text-xs">
-                  <span class="text-muted-foreground">
-                    Counter {{ Number(cp.proposedDiscountPercent) }}% {{ cp.lineId ? `on ${negotiationLineLabel(cp.line)}` : '(order)' }}
-                  </span>
-                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="negotiationRequestBadge(cp.status).class">
-                    {{ negotiationRequestBadge(cp.status).label }}
-                  </span>
-                </div>
-                <div v-for="cr in decidedChangeRequests" :key="'cr-' + cr.id" class="flex items-center justify-between gap-2 text-xs">
-                  <span class="text-muted-foreground capitalize">
-                    {{ cr.requestType.replace('_', ' ') }}{{ cr.lineId ? ` — ${negotiationLineLabel(cr.line)}` : '' }}
-                  </span>
-                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="negotiationRequestBadge(cr.status).class">
-                    {{ negotiationRequestBadge(cr.status).label }}
-                  </span>
-                </div>
               </div>
             </CardContent>
           </Card>
@@ -2004,6 +2131,15 @@ onUnmounted(() => {
           </DialogHeader>
 
           <div class="space-y-4 py-2 text-xs">
+            <div class="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/40 dark:border-emerald-900 p-3 text-xs text-emerald-800 dark:text-emerald-300 space-y-1">
+              <span class="font-semibold block">One Link, One Channel:</span>
+              <p>
+                The customer reviews, comments, counters discounts, and confirms the
+                deal — all through this portal link. You'll see every message live in
+                the Customer Negotiation panel below.
+              </p>
+            </div>
+
             <div class="rounded-xl border border-border bg-muted/30 p-3 space-y-2">
               <span class="font-semibold text-foreground flex items-center gap-1.5">
                 <ExternalLink class="w-3.5 h-3.5 text-primary" />

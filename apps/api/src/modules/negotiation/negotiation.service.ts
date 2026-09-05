@@ -26,10 +26,17 @@ export type NegotiationActivityType =
 
 /** Statuses in which a customer may confirm the quotation. */
 const CONFIRMABLE_STATUSES = new Set(['sent', 'negotiating', 'approved']);
-/** Statuses in which a customer may negotiate (counter / change request). */
-const NEGOTIABLE_STATUSES = new Set(['sent', 'negotiating', 'approved']);
-/** Statuses that flip to 'negotiating' on customer activity. */
-const FLIP_TO_NEGOTIATING = new Set(['sent', 'approved']);
+/**
+ * Statuses in which a customer may negotiate (counter / change request).
+ * 'confirmed' included on purpose: deals are re-openable — a follow-up message
+ * or counter after closing starts another review round.
+ */
+const NEGOTIABLE_STATUSES = new Set(['sent', 'negotiating', 'approved', 'confirmed']);
+/**
+ * Statuses that flip to 'negotiating' on customer activity. 'confirmed'
+ * included: a re-opened deal goes back through review before it can close again.
+ */
+const FLIP_TO_NEGOTIATING = new Set(['sent', 'approved', 'confirmed']);
 
 /** Deterministic ordering shared by every line loader so index-based mutation is safe. */
 const LINE_ORDER = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
@@ -303,10 +310,18 @@ export class NegotiationService {
         },
       }),
     ];
-    if (FLIP_TO_NEGOTIATING.has(quote.status)) {
+    // Only CUSTOMER activity re-opens / advances the deal — internal replies
+    // must never change the quotation status.
+    const customerFlips = author.type === 'customer' && FLIP_TO_NEGOTIATING.has(quote.status);
+    if (customerFlips) {
       transactionOps.push(prisma.quotation.update({ where: { id: quotationId }, data: { status: 'negotiating' } }));
     }
     const [comment] = await prisma.$transaction(transactionOps);
+    const createdComment = comment as { id: string };
+
+    if (customerFlips) {
+      this.emitStatus(orgId, quotationId, 'negotiating', quote.quotationNumber);
+    }
 
     // Only customer activity is audit-logged; internal replies live in the thread.
     if (author.type === 'customer') {
@@ -315,8 +330,15 @@ export class NegotiationService {
         authorName: resolvedAuthor.name,
         authorEmail: resolvedAuthor.email ?? null,
         lineId: input.lineId ?? null,
-        commentId: (comment as { id: string }).id,
+        commentId: createdComment.id,
       });
+
+      if (quote.status === 'confirmed') {
+        await this.audit(orgId, quotationId, 'deal_reopened', null, 'Customer resumed negotiation after the deal was confirmed', {
+          previousStatus: 'confirmed',
+          activity: 'comment',
+        });
+      }
 
       const recipients = await this.negotiationRecipients(orgId, quote.rep?.email);
       if (recipients.length > 0) {
@@ -336,12 +358,9 @@ export class NegotiationService {
     }
 
     this.emitNegotiation(orgId, quotationId, 'comment', { authorType: author.type });
-    if (FLIP_TO_NEGOTIATING.has(quote.status)) {
-      this.emitStatus(orgId, quotationId, 'negotiating', quote.quotationNumber);
-    }
 
     return prisma.negotiationComment.findUnique({
-      where: { id: (comment as { id: string }).id },
+      where: { id: createdComment.id },
       include: { line: { select: { id: true, productId: true } } },
     });
   }
@@ -369,7 +388,7 @@ export class NegotiationService {
     const actor: CustomerActor = { name: quote.customer.name, email: customerEmail };
 
     if (!NEGOTIABLE_STATUSES.has(quote.status)) {
-      throw new HttpError(400, `Change requests are only available on sent or negotiating quotations (current: '${quote.status}')`);
+      throw new HttpError(400, `Change requests are only available on sent, negotiating or confirmed quotations (current: '${quote.status}')`);
     }
 
     if (input.requestType !== 'other' && !input.lineId) {
@@ -412,7 +431,8 @@ export class NegotiationService {
         },
       }),
     ];
-    if (FLIP_TO_NEGOTIATING.has(quote.status)) {
+    const flips = FLIP_TO_NEGOTIATING.has(quote.status);
+    if (flips) {
       transactionOps.push(prisma.quotation.update({ where: { id: quotationId }, data: { status: 'negotiating' } }));
     }
     const [changeRequest] = await prisma.$transaction(transactionOps);
@@ -426,6 +446,13 @@ export class NegotiationService {
       note: input.note ?? null,
       requestedBy: actor.email,
     });
+
+    if (quote.status === 'confirmed') {
+      await this.audit(orgId, quotationId, 'deal_reopened', null, 'Customer resumed negotiation after the deal was confirmed', {
+        previousStatus: 'confirmed',
+        activity: 'change_request',
+      });
+    }
 
     const recipients = await this.negotiationRecipients(orgId, quote.rep?.email);
     if (recipients.length > 0) {
@@ -444,7 +471,7 @@ export class NegotiationService {
     }
 
     this.emitNegotiation(orgId, quotationId, 'change_request', { changeRequestId: created.id });
-    if (FLIP_TO_NEGOTIATING.has(quote.status)) {
+    if (flips) {
       this.emitStatus(orgId, quotationId, 'negotiating', quote.quotationNumber);
     }
 
@@ -581,7 +608,7 @@ export class NegotiationService {
     const actor: CustomerActor = { name: quote.customer.name, email: customerEmail };
 
     if (!NEGOTIABLE_STATUSES.has(quote.status)) {
-      throw new HttpError(400, `Counter proposals are only available on sent or negotiating quotations (current: '${quote.status}')`);
+      throw new HttpError(400, `Counter proposals are only available on sent, negotiating or confirmed quotations (current: '${quote.status}')`);
     }
 
     if (input.lineId) {
@@ -605,7 +632,8 @@ export class NegotiationService {
         },
       }),
     ];
-    if (FLIP_TO_NEGOTIATING.has(quote.status)) {
+    const flips = FLIP_TO_NEGOTIATING.has(quote.status);
+    if (flips) {
       transactionOps.push(prisma.quotation.update({ where: { id: quotationId }, data: { status: 'negotiating' } }));
     }
     const [counter] = await prisma.$transaction(transactionOps);
@@ -617,6 +645,13 @@ export class NegotiationService {
       proposedDiscountPercent: input.proposedDiscountPercent,
       proposedBy: actor.email,
     });
+
+    if (quote.status === 'confirmed') {
+      await this.audit(orgId, quotationId, 'deal_reopened', null, 'Customer resumed negotiation after the deal was confirmed', {
+        previousStatus: 'confirmed',
+        activity: 'counter',
+      });
+    }
 
     const recipients = await this.negotiationRecipients(orgId, quote.rep?.email);
     if (recipients.length > 0) {
@@ -636,7 +671,7 @@ export class NegotiationService {
     }
 
     this.emitNegotiation(orgId, quotationId, 'counter', { counterId: created.id });
-    if (FLIP_TO_NEGOTIATING.has(quote.status)) {
+    if (flips) {
       this.emitStatus(orgId, quotationId, 'negotiating', quote.quotationNumber);
     }
 

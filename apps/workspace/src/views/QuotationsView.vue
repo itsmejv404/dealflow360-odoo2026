@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, reactive, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import WorkspaceLayout from '../components/layout/WorkspaceLayout.vue';
 import { apiRequest } from '../lib/api';
@@ -93,11 +93,23 @@ const statusFilter = ref('');
 
 // ---- Customer-first quotation creation ----
 // A quotation is always built FOR a customer request — the flow starts by
-// picking the customer, never from an empty builder.
+// picking the customer, never from an empty builder. New customers can be
+// created right inside the picker; their portal link is emailed automatically
+// once the quotation is saved.
 const isCustomerPickerOpen = ref(false);
 const isLoadingCustomers = ref(false);
 const customers = ref<Customer[]>([]);
 const customerSearch = ref('');
+const pickerMode = ref<'pick' | 'create'>('pick');
+const customerTiers = ref<Array<{ id: string; name: string; code: string }>>([]);
+const newCustomerForm = reactive({
+  name: '',
+  email: '',
+  company: '',
+  phone: '',
+  tierId: '',
+});
+const isCreatingCustomer = ref(false);
 
 const filteredCustomers = computed(() => {
   const q = customerSearch.value.trim().toLowerCase();
@@ -113,21 +125,74 @@ const filteredCustomers = computed(() => {
 async function openCustomerPicker() {
   isCustomerPickerOpen.value = true;
   customerSearch.value = '';
-  if (customers.value.length > 0) return;
-  isLoadingCustomers.value = true;
-  try {
-    const res = await apiRequest<{ customers: Customer[] }>('/api/quotations/customers');
-    customers.value = res.customers || [];
-  } catch (err: any) {
-    errorMessage.value = err.message || 'Failed to load customers';
-  } finally {
-    isLoadingCustomers.value = false;
+  pickerMode.value = 'pick';
+  errorMessage.value = null;
+
+  const loads: Promise<void>[] = [];
+  if (customers.value.length === 0) {
+    loads.push(
+      (async () => {
+        isLoadingCustomers.value = true;
+        try {
+          const res = await apiRequest<{ customers: Customer[] }>('/api/quotations/customers');
+          customers.value = res.customers || [];
+        } catch (err: any) {
+          errorMessage.value = err.message || 'Failed to load customers';
+        } finally {
+          isLoadingCustomers.value = false;
+        }
+      })()
+    );
   }
+  if (customerTiers.value.length === 0) {
+    loads.push(
+      (async () => {
+        try {
+          const res = await apiRequest<{ tiers: Array<{ id: string; name: string; code: string }> }>('/api/catalog/tiers');
+          customerTiers.value = res.tiers || [];
+          if (customerTiers.value.length > 0 && customerTiers.value[0] && !newCustomerForm.tierId) {
+            newCustomerForm.tierId = customerTiers.value[0]!.id;
+          }
+        } catch {
+          // Non-fatal: tier select just stays empty with a hint
+        }
+      })()
+    );
+  }
+  await Promise.all(loads);
 }
 
-function startQuoteForCustomer(customer: Customer) {
+function startQuoteForCustomer(customer: Customer, isNew = false) {
   isCustomerPickerOpen.value = false;
-  router.push(`/quotations/new?customer=${customer.id}`);
+  const flag = isNew ? '&newCustomer=1' : '';
+  router.push(`/quotations/new?customer=${customer.id}${flag}`);
+}
+
+async function submitNewCustomer() {
+  errorMessage.value = null;
+  if (!newCustomerForm.name.trim() || !newCustomerForm.email.trim() || !newCustomerForm.tierId) {
+    errorMessage.value = 'Name, email and pricing tier are required to create a customer.';
+    return;
+  }
+  isCreatingCustomer.value = true;
+  try {
+    const res = await apiRequest<{ customer: Customer }>('/api/quotations/customers', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: newCustomerForm.name.trim(),
+        email: newCustomerForm.email.trim().toLowerCase(),
+        company: newCustomerForm.company.trim() || undefined,
+        phone: newCustomerForm.phone.trim() || undefined,
+        tierId: newCustomerForm.tierId,
+      }),
+    });
+    customers.value.push(res.customer);
+    startQuoteForCustomer(res.customer, true);
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to create the customer';
+  } finally {
+    isCreatingCustomer.value = false;
+  }
 }
 
 const filteredQuotations = computed(() => {
@@ -242,7 +307,7 @@ onMounted(() => {
       </div>
 
       <!-- Quick Metrics Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card class="border-border bg-card shadow-xs">
           <CardHeader class="pb-2">
             <div class="flex items-center justify-between">
@@ -277,25 +342,6 @@ onMounted(() => {
           <CardContent>
             <p class="text-xs text-muted-foreground">
               Gross sum of current active quotations
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card class="border-border bg-card shadow-xs">
-          <CardHeader class="pb-2">
-            <div class="flex items-center justify-between">
-              <CardDescription class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Tenancy Scope
-              </CardDescription>
-              <Layers class="w-4 h-4 text-primary" />
-            </div>
-            <CardTitle class="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-              Isolated
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p class="text-xs text-muted-foreground">
-              Quotes strictly scoped to your organization
             </p>
           </CardContent>
         </Card>
@@ -443,51 +489,163 @@ onMounted(() => {
               New Quotation for a Customer Request
             </DialogTitle>
             <DialogDescription class="text-xs">
-              Select the customer whose request you are quoting. Their requirement
-              details will appear beside the builder.
+              Select the customer whose request you are quoting — or add a new
+              customer and we'll email them their portal link when the quotation is
+              saved. All further communication happens through that link.
             </DialogDescription>
           </DialogHeader>
 
-          <div class="relative">
-            <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              v-model="customerSearch"
-              placeholder="Search customers by name, email or company..."
-              class="pl-9 h-9 text-xs"
-            />
-          </div>
-
-          <div class="max-h-72 overflow-y-auto space-y-1.5 -mx-1 px-1">
-            <div v-if="isLoadingCustomers" class="py-8 text-center text-xs text-muted-foreground">
-              Loading customers...
-            </div>
-            <div
-              v-else-if="filteredCustomers.length === 0"
-              class="py-8 text-center text-xs text-muted-foreground"
-            >
-              No customers match "{{ customerSearch }}".
-            </div>
+          <!-- Mode switch -->
+          <div class="flex items-center gap-1.5 bg-muted p-1 rounded-lg border border-border w-fit">
             <button
-              v-for="customer in filteredCustomers"
-              :key="customer.id"
-              class="w-full text-left p-3 rounded-lg border border-border bg-card hover:border-primary/50 hover:bg-muted/20 transition-colors flex items-center justify-between gap-3 group"
-              @click="startQuoteForCustomer(customer)"
+              class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+              :class="pickerMode === 'pick' ? 'bg-background text-foreground shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'"
+              @click="pickerMode = 'pick'"
             >
-              <div class="min-w-0">
-                <div class="text-xs font-semibold text-foreground truncate">{{ customer.name }}</div>
-                <div class="text-2xs text-muted-foreground truncate">
-                  {{ customer.company ? `${customer.company} · ` : '' }}{{ customer.email }}
-                </div>
-              </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <Badge v-if="customer.tier" variant="outline" class="text-2xs">{{ customer.tier.name }}</Badge>
-                <Button size="sm" class="h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Plus class="w-3 h-3 mr-1" />
-                  Build Quote
-                </Button>
-              </div>
+              Existing Customer
+            </button>
+            <button
+              class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1"
+              :class="pickerMode === 'create' ? 'bg-background text-foreground shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground'"
+              @click="pickerMode = 'create'"
+            >
+              <Plus class="w-3.5 h-3.5" />
+              New Customer
             </button>
           </div>
+
+          <!-- Error message inside the picker -->
+          <div
+            v-if="isCustomerPickerOpen && errorMessage"
+            class="p-2.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-start gap-1.5"
+          >
+            <AlertCircle class="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>{{ errorMessage }}</span>
+          </div>
+
+          <!-- PICK MODE -->
+          <template v-if="pickerMode === 'pick'">
+            <div class="relative">
+              <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                v-model="customerSearch"
+                placeholder="Search customers by name, email or company..."
+                class="pl-9 h-9 text-xs"
+              />
+            </div>
+
+            <div class="max-h-72 overflow-y-auto space-y-1.5 -mx-1 px-1">
+              <div v-if="isLoadingCustomers" class="py-8 text-center text-xs text-muted-foreground">
+                Loading customers...
+              </div>
+              <div
+                v-else-if="filteredCustomers.length === 0"
+                class="py-8 text-center text-xs text-muted-foreground"
+              >
+                No customers match "{{ customerSearch }}".
+              </div>
+              <button
+                v-for="customer in filteredCustomers"
+                :key="customer.id"
+                class="w-full text-left p-3 rounded-lg border border-border bg-card hover:border-primary/50 hover:bg-muted/20 transition-colors flex items-center justify-between gap-3 group"
+                @click="startQuoteForCustomer(customer)"
+              >
+                <div class="min-w-0">
+                  <div class="text-xs font-semibold text-foreground truncate">{{ customer.name }}</div>
+                  <div class="text-2xs text-muted-foreground truncate">
+                    {{ customer.company ? `${customer.company} · ` : '' }}{{ customer.email }}
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <Badge v-if="customer.tier" variant="outline" class="text-2xs">{{ customer.tier.name }}</Badge>
+                  <Button size="sm" class="h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Plus class="w-3 h-3 mr-1" />
+                    Build Quote
+                  </Button>
+                </div>
+              </button>
+            </div>
+          </template>
+
+          <!-- CREATE MODE: new customer request -->
+          <template v-else>
+            <div class="space-y-3 py-1">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div class="space-y-1.5">
+                  <label class="text-xs font-semibold text-foreground">Customer Name <span class="text-destructive">*</span></label>
+                  <Input
+                    v-model="newCustomerForm.name"
+                    placeholder="e.g. Stark Industries"
+                    class="h-9 text-xs"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="text-xs font-semibold text-foreground">Email <span class="text-destructive">*</span></label>
+                  <Input
+                    v-model="newCustomerForm.email"
+                    type="email"
+                    placeholder="contact@customer.com"
+                    class="h-9 text-xs"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="text-xs font-semibold text-foreground">Company (optional)</label>
+                  <Input
+                    v-model="newCustomerForm.company"
+                    placeholder="Company / organization"
+                    class="h-9 text-xs"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="text-xs font-semibold text-foreground">Phone (optional)</label>
+                  <Input
+                    v-model="newCustomerForm.phone"
+                    placeholder="+1 ..."
+                    class="h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div class="space-y-1.5">
+                <label class="text-xs font-semibold text-foreground">Pricing Tier <span class="text-destructive">*</span></label>
+                <select
+                  v-model="newCustomerForm.tierId"
+                  class="w-full h-9 px-3 rounded-md border border-input bg-background text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring"
+                >
+                  <option :value="''" disabled>Choose a tier...</option>
+                  <option v-for="tier in customerTiers" :key="tier.id" :value="tier.id">
+                    {{ tier.name }}
+                  </option>
+                </select>
+                <p v-if="customerTiers.length === 0" class="text-2xs text-amber-600 dark:text-amber-400">
+                  No tiers configured yet — set up customer tiers in the Catalog first.
+                </p>
+              </div>
+
+              <div class="p-3 rounded-lg bg-primary/5 border border-primary/20 text-2xs text-muted-foreground flex items-start gap-2">
+                <Send class="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
+                <span>
+                  After you save the quotation, this customer automatically receives their
+                  secure portal link by email — they review, negotiate, and close the deal there.
+                </span>
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-1">
+              <Button variant="outline" size="sm" class="text-xs" @click="pickerMode = 'pick'">
+                Back to List
+              </Button>
+              <Button
+                size="sm"
+                class="text-xs font-semibold"
+                :disabled="isCreatingCustomer || !newCustomerForm.name.trim() || !newCustomerForm.email.trim() || !newCustomerForm.tierId"
+                @click="submitNewCustomer"
+              >
+                <Plus class="w-3.5 h-3.5 mr-1" />
+                {{ isCreatingCustomer ? 'Creating...' : 'Create & Build Quote' }}
+              </Button>
+            </div>
+          </template>
         </DialogContent>
       </Dialog>
     </div>

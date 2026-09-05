@@ -407,7 +407,7 @@ model AuditLog {
   userId         String?  @map("user_id")
   userEmail      String?  @map("user_email")
   userRole       String?  @map("user_role")
-  action         String   // "created" | "updated" | "deleted" | "submitted_for_approval" | "manager_approved" | "finance_escalated" | "finance_approved" | "rejected" | "edited" | "auto_approved" | "sent_to_customer" | "customer_commented" | "change_requested" | "counter_proposed" | "counter_accepted" | "counter_declined" | "change_request_accepted" | "change_request_declined" | "customer_confirmed" | "reentered_approval"
+  action         String   // "created" | "updated" | "deleted" | "submitted_for_approval" | "manager_approved" | "finance_escalated" | "finance_approved" | "rejected" | "edited" | "auto_approved" | "sent_to_customer" | "customer_commented" | "change_requested" | "counter_proposed" | "counter_accepted" | "counter_declined" | "change_request_accepted" | "change_request_declined" | "customer_confirmed" | "reentered_approval" | "deal_reopened"
   reason         String?
   metadata       Json?
   createdAt      DateTime @default(now()) @map("created_at")

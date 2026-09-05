@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { customerAuth } from '@/lib/auth';
 import { portalApiRequest } from '@/lib/api';
@@ -13,7 +13,6 @@ import {
   ShieldCheck,
   User,
   Layers,
-  Sparkles,
   MessageCircle,
   Send,
   RefreshCw,
@@ -163,10 +162,12 @@ const changeQuantity = ref<number | null>(null);
 const changeDiscount = ref<number | null>(null);
 const changeNote = ref('');
 
-const activeTab = ref<'comments' | 'counter' | 'change'>('comments');
+const isCounterFormOpen = ref(false);
+const isChangeFormOpen = ref(false);
 const submitting = ref<string | null>(null);
 const negotiationError = ref<string | null>(null);
 const negotiationNotice = ref<string | null>(null);
+const chatFeedEl = ref<HTMLElement | null>(null);
 
 const canNegotiate = computed(() =>
   quotation.value !== null && ['sent', 'negotiating', 'approved'].includes(quotation.value.status)
@@ -174,6 +175,107 @@ const canNegotiate = computed(() =>
 
 const canConfirm = computed(() =>
   quotation.value !== null && ['sent', 'negotiating', 'approved'].includes(quotation.value.status)
+);
+
+/**
+ * Unified chat timeline — comments, counter-proposals and change requests
+ * merged chronologically so the whole negotiation reads as one conversation
+ * with the deal actions embedded as cards.
+ */
+type TimelineItem =
+  | {
+      kind: 'comment';
+      id: string;
+      createdAt: string;
+      authorType: 'customer' | 'internal';
+      authorName: string;
+      body: string;
+      lineId: string | null;
+    }
+  | {
+      kind: 'counter';
+      id: string;
+      createdAt: string;
+      proposedDiscountPercent: string;
+      note: string | null;
+      status: string;
+      decisionNote: string | null;
+      lineId: string | null;
+    }
+  | {
+      kind: 'change';
+      id: string;
+      createdAt: string;
+      requestType: string;
+      proposedQuantity: number | null;
+      proposedDiscountPercent: string | null;
+      note: string | null;
+      status: string;
+      resolutionNote: string | null;
+      lineId: string | null;
+    };
+
+const negotiationTimeline = computed<TimelineItem[]>(() => {
+  const data = negotiation.value;
+  if (!data) return [];
+  const items: TimelineItem[] = [];
+
+  for (const c of data.comments ?? []) {
+    items.push({
+      kind: 'comment',
+      id: c.id,
+      createdAt: c.createdAt,
+      authorType: c.authorType,
+      authorName: c.authorName,
+      body: c.body,
+      lineId: c.lineId,
+    });
+  }
+  for (const cp of data.counterProposals ?? []) {
+    items.push({
+      kind: 'counter',
+      id: cp.id,
+      createdAt: cp.createdAt,
+      proposedDiscountPercent: cp.proposedDiscountPercent,
+      note: cp.note,
+      status: cp.status,
+      decisionNote: cp.decisionNote,
+      lineId: cp.lineId,
+    });
+  }
+  for (const cr of data.changeRequests ?? []) {
+    items.push({
+      kind: 'change',
+      id: cr.id,
+      createdAt: cr.createdAt,
+      requestType: cr.requestType,
+      proposedQuantity: cr.proposedQuantity,
+      proposedDiscountPercent: cr.proposedDiscountPercent,
+      note: cr.note,
+      status: cr.status,
+      resolutionNote: cr.resolutionNote,
+      lineId: cr.lineId,
+    });
+  }
+
+  return items.sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+});
+
+function scrollChatToBottom() {
+  requestAnimationFrame(() => {
+    chatFeedEl.value?.scrollTo({ top: chatFeedEl.value.scrollHeight, behavior: 'smooth' });
+  });
+}
+
+// Keep the chat pinned to the newest message as the thread grows.
+watch(
+  () => negotiationTimeline.value.length,
+  async () => {
+    await nextTick();
+    scrollChatToBottom();
+  }
 );
 
 function lineLabel(lineId: string | null | undefined): string {
@@ -184,8 +286,46 @@ function lineLabel(lineId: string | null | undefined): string {
 
 function setCommentTarget(lineId: string | null) {
   commentLineId.value = lineId;
-  activeTab.value = 'comments';
   document.getElementById('negotiation-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Focus the composer after the scroll settles
+  setTimeout(() => {
+    (document.getElementById('chat-composer-input') as HTMLInputElement | null)?.focus();
+  }, 350);
+}
+
+function toggleCounterForm() {
+  isCounterFormOpen.value = !isCounterFormOpen.value;
+  if (isCounterFormOpen.value) isChangeFormOpen.value = false;
+}
+
+function toggleChangeForm() {
+  isChangeFormOpen.value = !isChangeFormOpen.value;
+  if (isChangeFormOpen.value) isCounterFormOpen.value = false;
+}
+
+// Chat thread helpers — customer bubbles sit right, sales team left.
+function isTeamItem(item: TimelineItem): boolean {
+  return item.kind === 'comment' && item.authorType === 'internal';
+}
+
+function itemAuthor(item: TimelineItem): string {
+  if (item.kind === 'comment') return item.authorType === 'customer' ? 'You' : item.authorName || 'Sales Team';
+  return 'You';
+}
+
+function itemAvatar(item: TimelineItem): string {
+  if (item.kind === 'comment' && item.authorType === 'internal') {
+    return (item.authorName || 'ST').substring(0, 2).toUpperCase();
+  }
+  return (negotiation.value?.quotation.customerName || 'CU').substring(0, 2).toUpperCase();
+}
+
+function formatTimeShort(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
 }
 
 async function loadNegotiation() {
@@ -210,7 +350,8 @@ async function submitComment() {
       data: { lineId: commentLineId.value, body: commentBody.value.trim() },
     });
     commentBody.value = '';
-    negotiationNotice.value = 'Your comment was sent to the sales team.';
+    commentLineId.value = null;
+    negotiationNotice.value = null;
     await refreshAfterAction();
   } catch (err: any) {
     negotiationError.value = err?.data?.error || err.message || 'Failed to send comment.';
@@ -238,7 +379,8 @@ async function submitCounter() {
     });
     counterDiscount.value = null;
     counterNote.value = '';
-    negotiationNotice.value = 'Your counter-proposal was submitted for review.';
+    isCounterFormOpen.value = false;
+    negotiationNotice.value = null;
     await refreshAfterAction();
   } catch (err: any) {
     negotiationError.value = err?.data?.error || err.message || 'Failed to submit counter-proposal.';
@@ -265,7 +407,8 @@ async function submitChangeRequest() {
     changeQuantity.value = null;
     changeDiscount.value = null;
     changeNote.value = '';
-    negotiationNotice.value = 'Your change request was submitted for review.';
+    isChangeFormOpen.value = false;
+    negotiationNotice.value = null;
     await refreshAfterAction();
   } catch (err: any) {
     negotiationError.value = err?.data?.error || err.message || 'Failed to submit change request.';
@@ -288,7 +431,8 @@ async function confirmQuote() {
       negotiationNotice.value =
         'Thank you! Your confirmed terms exceed the standard approval thresholds, so the quotation has been routed to the approval team for a final sign-off. We will notify you once it is approved.';
     } else {
-      negotiationNotice.value = 'Order confirmed! Thank you for your business.';
+      negotiationNotice.value =
+        'Deal closed — thank you for your business! Need another round? Send a message here and the quotation re-opens for review.';
     }
     await refreshAfterAction();
   } catch (err: any) {
@@ -616,16 +760,17 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Negotiation & Acceptance Card (Phase 14) -->
+        <!-- Negotiation & Deal Chat (Phase 14) -->
         <div id="negotiation-card" class="rounded-2xl border border-primary/30 bg-card shadow-xs overflow-hidden">
           <div class="p-6 border-b border-border bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div class="space-y-1">
               <div class="flex items-center gap-2 font-bold text-sm text-foreground">
-                <Sparkles class="w-4 h-4 text-primary" />
-                <span>Negotiate or Confirm Your Order</span>
+                <MessageCircle class="w-4 h-4 text-primary" />
+                <span>Deal Chat — Review, Refine & Close</span>
               </div>
               <p class="text-xs text-muted-foreground">
-                Comment on any line, propose a counter-discount, request changes — or confirm your order with one click. Confirmed terms that exceed standard discount thresholds are reviewed by the approval team before they become binding.
+                Chat with your sales team, propose discounts, request changes — as many review
+                rounds as you need. When the terms are right, close the deal with one click.
               </p>
             </div>
 
@@ -637,11 +782,11 @@ onMounted(() => {
             >
               <RefreshCw v-if="submitting === 'confirm'" class="w-4 h-4 animate-spin" />
               <CheckCircle2 v-else class="w-4 h-4" />
-              Confirm Quotation
+              Confirm & Close Deal
             </button>
             <div v-else class="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-muted text-muted-foreground text-xs font-semibold">
               <CheckCircle2 class="w-4 h-4" />
-              {{ quotation.status === 'confirmed' ? 'Order Confirmed' : quotation.status === 'pending_approval' ? 'Awaiting Internal Approval' : 'Not Available' }}
+              {{ quotation.status === 'confirmed' ? 'Deal Closed' : quotation.status === 'pending_approval' ? 'Awaiting Internal Approval' : 'Not Available' }}
             </div>
           </div>
 
@@ -655,87 +800,125 @@ onMounted(() => {
             <span>{{ negotiationError }}</span>
           </div>
 
-          <!-- Tabs -->
-          <div class="px-6 pt-4 flex items-center gap-1.5 border-b border-border overflow-x-auto">
-            <button
-              v-for="tab in [
-                { id: 'comments', label: `Discussion (${negotiation?.comments.length ?? 0})`, icon: MessageCircle },
-                { id: 'counter', label: 'Counter-Discount', icon: ArrowLeftRight },
-                { id: 'change', label: 'Change Request', icon: FileEdit },
-              ]"
-              :key="tab.id"
-              @click="activeTab = tab.id as any"
-              class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-t-lg border border-b-0 transition-colors"
-              :class="activeTab === tab.id ? 'bg-background text-foreground border-border' : 'text-muted-foreground hover:text-foreground border-transparent'"
-            >
-              <component :is="tab.icon" class="w-3.5 h-3.5" />
-              {{ tab.label }}
-            </button>
-          </div>
-
           <div class="p-6" v-if="canNegotiate">
-            <!-- Comments tab -->
-            <div v-if="activeTab === 'comments'" class="space-y-4">
-              <div class="space-y-3 max-h-72 overflow-y-auto pr-1">
-                <div v-if="!negotiation?.comments.length" class="text-xs text-muted-foreground text-center py-6 border border-dashed border-border rounded-lg">
-                  No messages yet. Start the discussion below.
-                </div>
-                <div
-                  v-for="c in negotiation?.comments"
-                  :key="c.id"
-                  class="flex gap-2.5"
-                  :class="c.authorType === 'customer' ? 'flex-row-reverse' : ''"
-                >
-                  <div
-                    class="size-7 rounded-lg grid place-items-center text-[10px] font-bold shrink-0"
-                    :class="c.authorType === 'customer' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
-                  >
-                    {{ c.authorName.substring(0, 2).toUpperCase() }}
-                  </div>
-                  <div class="max-w-[80%] space-y-0.5">
-                    <div class="flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span class="font-semibold text-foreground">{{ c.authorName }}</span>
-                      <span>{{ c.authorType === 'customer' ? 'You' : 'Sales Team' }}</span>
-                      <span v-if="c.lineId" class="px-1.5 py-0.5 rounded bg-muted border border-border">{{ lineLabel(c.lineId) }}</span>
-                    </div>
-                    <div
-                      class="px-3 py-2 rounded-xl text-xs"
-                      :class="c.authorType === 'customer' ? 'bg-primary text-primary-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm'"
-                    >
-                      {{ c.body }}
-                    </div>
-                    <div class="text-[10px] text-muted-foreground">{{ formatDate(c.createdAt) }}</div>
-                  </div>
+            <!-- Chat feed -->
+            <div ref="chatFeedEl" class="h-80 overflow-y-auto rounded-xl bg-muted/20 border border-border/60 p-3 space-y-3 scroll-smooth">
+              <div
+                v-if="negotiationTimeline.length === 0"
+                class="h-full grid place-items-center text-xs text-muted-foreground text-center"
+              >
+                <div class="space-y-1">
+                  <MessageCircle class="w-6 h-6 mx-auto text-muted-foreground/50" />
+                  <p>No messages yet — say hello or ask anything about your quotation.</p>
+                  <p class="text-[11px]">Tip: click the chat icon on any line item above to discuss it specifically.</p>
                 </div>
               </div>
 
-              <div class="pt-3 border-t border-border space-y-2">
-                <div v-if="commentLineId" class="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-primary/10 text-primary text-[11px]">
-                  Commenting on: <strong>{{ lineLabel(commentLineId) }}</strong>
-                  <button @click="commentLineId = null" class="underline hover:no-underline">clear</button>
+              <div
+                v-for="item in negotiationTimeline"
+                :key="item.kind + '-' + item.id"
+                class="flex gap-2.5"
+                :class="isTeamItem(item) ? '' : 'flex-row-reverse'"
+              >
+                <div
+                  class="size-7 rounded-lg grid place-items-center text-[10px] font-bold shrink-0"
+                  :class="isTeamItem(item) ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'"
+                >
+                  {{ itemAvatar(item) }}
                 </div>
-                <div class="flex gap-2">
-                  <input
-                    v-model="commentBody"
-                    type="text"
-                    placeholder="Write a message about your quotation..."
-                    class="flex-1 px-3 py-2 rounded-lg border border-border bg-background text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    @keydown.enter="submitComment"
-                  />
-                  <button
-                    :disabled="!commentBody.trim() || submitting === 'comment'"
-                    @click="submitComment"
-                    class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50"
+                <div class="max-w-[82%] space-y-0.5">
+                  <div class="flex items-center gap-2 text-[11px] text-muted-foreground" :class="isTeamItem(item) ? '' : 'sm:flex-row-reverse'">
+                    <span class="font-semibold text-foreground">{{ itemAuthor(item) }}</span>
+                    <span v-if="item.lineId" class="px-1.5 py-0.5 rounded bg-muted border border-border">{{ lineLabel(item.lineId) }}</span>
+                    <span class="text-[10px]">{{ formatTimeShort(item.createdAt) }}</span>
+                  </div>
+
+                  <!-- Comment bubble -->
+                  <div
+                    v-if="item.kind === 'comment'"
+                    class="px-3 py-2 rounded-xl text-xs"
+                    :class="isTeamItem(item) ? 'bg-muted text-foreground rounded-tl-sm' : 'bg-primary text-primary-foreground rounded-tr-sm'"
                   >
-                    <Send class="w-3.5 h-3.5" />
-                    Send
-                  </button>
+                    {{ item.body }}
+                  </div>
+
+                  <!-- Counter-proposal card -->
+                  <div
+                    v-else-if="item.kind === 'counter'"
+                    class="p-3 rounded-xl border text-xs space-y-1.5"
+                    :class="item.status === 'open'
+                      ? 'border-amber-300/60 bg-amber-50 dark:bg-amber-950/40 rounded-tr-sm'
+                      : 'border-border bg-muted/30 rounded-tr-sm'"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="font-semibold text-foreground">
+                        <ArrowLeftRight class="w-3.5 h-3.5 inline mr-1 text-primary" />
+                        Counter-discount: <span class="text-primary font-bold">{{ Number(item.proposedDiscountPercent) }}%</span>
+                        {{ item.lineId ? `on ${lineLabel(item.lineId)}` : 'on the whole order' }}
+                      </div>
+                      <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="requestStatusBadge(item.status).class">
+                        {{ requestStatusBadge(item.status).label }}
+                      </span>
+                    </div>
+                    <p v-if="item.note" class="text-muted-foreground italic">"{{ item.note }}"</p>
+                    <p v-if="item.decisionNote" class="text-[11px] text-muted-foreground">Sales response: "{{ item.decisionNote }}"</p>
+                  </div>
+
+                  <!-- Change-request card -->
+                  <div
+                    v-else
+                    class="p-3 rounded-xl border text-xs space-y-1.5"
+                    :class="item.status === 'open'
+                      ? 'border-sky-300/60 bg-sky-50 dark:bg-sky-950/40 rounded-tr-sm'
+                      : 'border-border bg-muted/30 rounded-tr-sm'"
+                  >
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="font-semibold text-foreground capitalize">
+                        <FileEdit class="w-3.5 h-3.5 inline mr-1 text-primary" />
+                        {{ item.requestType.replace('_', ' ') }}
+                        <template v-if="item.proposedQuantity"> → qty {{ item.proposedQuantity }}</template>
+                        <template v-if="item.proposedDiscountPercent"> → {{ Number(item.proposedDiscountPercent) }}%</template>
+                      </div>
+                      <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="requestStatusBadge(item.status).class">
+                        {{ requestStatusBadge(item.status).label }}
+                      </span>
+                    </div>
+                    <p v-if="item.note" class="text-muted-foreground italic">"{{ item.note }}"</p>
+                    <p v-if="item.resolutionNote" class="text-[11px] text-muted-foreground">Sales response: "{{ item.resolutionNote }}"</p>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <!-- Counter tab -->
-            <div v-else-if="activeTab === 'counter'" class="space-y-4">
+            <!-- Quick actions -->
+            <div class="pt-3 flex items-center gap-2 flex-wrap">
+              <button
+                @click="toggleCounterForm"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors"
+                :class="isCounterFormOpen ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40'"
+              >
+                <ArrowLeftRight class="w-3.5 h-3.5" />
+                Propose Discount
+              </button>
+              <button
+                @click="toggleChangeForm"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors"
+                :class="isChangeFormOpen ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40'"
+              >
+                <FileEdit class="w-3.5 h-3.5" />
+                Request Change
+              </button>
+              <span
+                v-if="commentLineId"
+                class="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-primary/10 text-primary text-[11px]"
+              >
+                Discussing: <strong>{{ lineLabel(commentLineId) }}</strong>
+                <button @click="commentLineId = null" class="underline hover:no-underline">clear</button>
+              </span>
+            </div>
+
+            <!-- Inline counter form -->
+            <div v-if="isCounterFormOpen" class="mt-3 p-3.5 rounded-xl border border-amber-300/60 bg-amber-50 dark:bg-amber-950/40 space-y-3">
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div class="space-y-1.5">
                   <label class="text-[11px] font-semibold text-foreground uppercase tracking-wide">Scope</label>
@@ -789,7 +972,13 @@ onMounted(() => {
                   class="w-full px-3 py-2 rounded-lg border border-border bg-background text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
                 ></textarea>
               </div>
-              <div class="flex justify-end">
+              <div class="flex justify-end gap-2">
+                <button
+                  @click="isCounterFormOpen = false"
+                  class="px-3 py-2 rounded-lg border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  Cancel
+                </button>
                 <button
                   :disabled="submitting === 'counter' || (counterScope === 'line' && !counterLineId) || counterDiscount === null"
                   @click="submitCounter"
@@ -800,31 +989,10 @@ onMounted(() => {
                   Submit Counter-Proposal
                 </button>
               </div>
-
-              <!-- Existing counters -->
-              <div v-if="negotiation?.counterProposals.length" class="pt-3 border-t border-border space-y-2">
-                <div class="text-[11px] font-semibold text-foreground uppercase tracking-wide">Your Counter-Proposals</div>
-                <div
-                  v-for="cp in negotiation.counterProposals"
-                  :key="cp.id"
-                  class="flex items-center justify-between gap-3 p-3 rounded-lg border border-border bg-muted/20 text-xs"
-                >
-                  <div class="space-y-0.5">
-                    <div class="font-semibold text-foreground">
-                      {{ Number(cp.proposedDiscountPercent) }}% {{ cp.lineId ? `on ${lineLabel(cp.lineId)}` : 'on the whole order' }}
-                    </div>
-                    <div v-if="cp.note" class="text-muted-foreground">{{ cp.note }}</div>
-                    <div class="text-[10px] text-muted-foreground">{{ formatDate(cp.createdAt) }}</div>
-                  </div>
-                  <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="requestStatusBadge(cp.status).class">
-                    {{ requestStatusBadge(cp.status).label }}
-                  </span>
-                </div>
-              </div>
             </div>
 
-            <!-- Change request tab -->
-            <div v-else class="space-y-4">
+            <!-- Inline change form -->
+            <div v-if="isChangeFormOpen" class="mt-3 p-3.5 rounded-xl border border-sky-300/60 bg-sky-50 dark:bg-sky-950/40 space-y-3">
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div class="space-y-1.5">
                   <label class="text-[11px] font-semibold text-foreground uppercase tracking-wide">Request Type</label>
@@ -881,7 +1049,13 @@ onMounted(() => {
                   class="w-full px-3 py-2 rounded-lg border border-border bg-background text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
                 ></textarea>
               </div>
-              <div class="flex justify-end">
+              <div class="flex justify-end gap-2">
+                <button
+                  @click="isChangeFormOpen = false"
+                  class="px-3 py-2 rounded-lg border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  Cancel
+                </button>
                 <button
                   :disabled="submitting === 'change' || (changeType !== 'other' && !changeLineId) || (changeType === 'quantity_change' && !changeQuantity)"
                   @click="submitChangeRequest"
@@ -892,38 +1066,38 @@ onMounted(() => {
                   Submit Change Request
                 </button>
               </div>
+            </div>
 
-              <!-- Existing change requests -->
-              <div v-if="negotiation?.changeRequests.length" class="pt-3 border-t border-border space-y-2">
-                <div class="text-[11px] font-semibold text-foreground uppercase tracking-wide">Your Change Requests</div>
-                <div
-                  v-for="cr in negotiation.changeRequests"
-                  :key="cr.id"
-                  class="flex items-center justify-between gap-3 p-3 rounded-lg border border-border bg-muted/20 text-xs"
-                >
-                  <div class="space-y-0.5">
-                    <div class="font-semibold text-foreground">
-                      <span class="capitalize">{{ cr.requestType.replace('_', ' ') }}</span>
-                      <template v-if="cr.lineId"> — {{ lineLabel(cr.lineId) }}</template>
-                      <template v-if="cr.proposedQuantity"> → qty {{ cr.proposedQuantity }}</template>
-                      <template v-if="cr.proposedDiscountPercent"> → {{ Number(cr.proposedDiscountPercent) }}%</template>
-                    </div>
-                    <div v-if="cr.note" class="text-muted-foreground">{{ cr.note }}</div>
-                    <div v-if="cr.resolutionNote" class="text-[11px] text-muted-foreground italic">Response: "{{ cr.resolutionNote }}"</div>
-                    <div class="text-[10px] text-muted-foreground">{{ formatDate(cr.createdAt) }}</div>
-                  </div>
-                  <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="requestStatusBadge(cr.status).class">
-                    {{ requestStatusBadge(cr.status).label }}
-                  </span>
-                </div>
-              </div>
+            <!-- Composer -->
+            <div class="mt-3 pt-3 border-t border-border flex gap-2">
+              <input
+                id="chat-composer-input"
+                v-model="commentBody"
+                type="text"
+                placeholder="Type a message about your quotation..."
+                class="flex-1 px-3 py-2 rounded-lg border border-border bg-background text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                @keydown.enter="submitComment"
+              />
+              <button
+                :disabled="!commentBody.trim() || submitting === 'comment'"
+                @click="submitComment"
+                class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                <Send class="w-3.5 h-3.5" />
+                Send
+              </button>
             </div>
           </div>
 
           <div v-else class="p-6 text-xs text-muted-foreground flex items-center gap-2 border-t border-border">
-            <Hourglass class="w-4 h-4" />
-            Negotiation tools are available once the quotation is sent to you. This quotation is currently
-            <strong class="text-foreground">&nbsp;{{ getStatusBadge(quotation.status).label }}</strong>.
+            <Hourglass class="w-4 h-4 shrink-0" />
+            <span>
+              Negotiation opens once the quotation is sent to you — currently
+              <strong class="text-foreground">{{ getStatusBadge(quotation.status).label }}</strong>.
+              <template v-if="quotation.status === 'confirmed'">
+                Need another round? Reply from your email link — a new message re-opens the deal for review.
+              </template>
+            </span>
           </div>
         </div>
       </div>

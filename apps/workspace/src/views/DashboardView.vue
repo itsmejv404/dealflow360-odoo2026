@@ -8,12 +8,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   Settings,
-  ShieldCheck,
   CheckCircle2,
   ArrowRight,
   Layers,
-  Coins,
-  Clock,
   Users,
   FileText,
 } from 'lucide-vue-next';
@@ -57,8 +54,7 @@ onMounted(async () => {
           </h1>
 
           <p class="text-primary-foreground/90 text-sm sm:text-base leading-relaxed">
-            Workspace for <strong class="text-primary-foreground font-semibold">{{ authStore.state.organization?.name || 'Your Organization' }}</strong>. 
-            Operating in <strong class="text-primary-foreground">{{ authStore.state.organization?.currency || 'USD' }}</strong> ({{ authStore.state.organization?.timezone || 'UTC' }}).
+            Workspace for <strong class="text-primary-foreground font-semibold">{{ authStore.state.organization?.name || 'Your Organization' }}</strong>.
           </p>
 
           <div class="pt-2 flex flex-wrap gap-3">
@@ -80,60 +76,6 @@ onMounted(async () => {
             </Button>
           </div>
         </div>
-      </div>
-
-      <!-- Quick Metrics Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card class="border-border bg-card shadow-xs">
-          <CardHeader class="pb-2">
-            <div class="flex items-center justify-between">
-              <CardDescription class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Operating Currency
-              </CardDescription>
-              <Coins class="w-4 h-4 text-primary" />
-            </div>
-            <CardTitle class="text-2xl font-bold text-foreground mt-1">
-              {{ authStore.state.organization?.currency || 'USD' }}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p class="text-xs text-muted-foreground">Catalog and invoice pricing denomination</p>
-          </CardContent>
-        </Card>
-
-        <Card class="border-border bg-card shadow-xs">
-          <CardHeader class="pb-2">
-            <div class="flex items-center justify-between">
-              <CardDescription class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Operating Timezone
-              </CardDescription>
-              <Clock class="w-4 h-4 text-primary" />
-            </div>
-            <CardTitle class="text-2xl font-bold text-foreground mt-1">
-              {{ authStore.state.organization?.timezone || 'UTC' }}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p class="text-xs text-muted-foreground">Billing schedules & health evaluation timezone</p>
-          </CardContent>
-        </Card>
-
-        <Card class="border-border bg-card shadow-xs">
-          <CardHeader class="pb-2">
-            <div class="flex items-center justify-between">
-              <CardDescription class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Data Isolation & Security
-              </CardDescription>
-              <ShieldCheck class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            </div>
-            <CardTitle class="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-2">
-              <span>Active</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p class="text-xs text-muted-foreground">Tenant-scoped PostgreSQL + Secure Storage</p>
-          </CardContent>
-        </Card>
       </div>
 
       <!-- Workspace Modules Overview -->

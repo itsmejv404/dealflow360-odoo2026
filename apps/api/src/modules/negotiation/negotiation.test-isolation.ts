@@ -250,6 +250,60 @@ async function runNegotiationIsolationTest() {
   }
   console.log('✔ Test 6 PASSED: within-ceiling confirmation → status confirmed');
 
+  // ---------- Test 6b: deals re-open — comment after confirm flips to negotiating ----------
+  await negotiationService.addComment(
+    orgA.id,
+    withinCeilingQuote.id,
+    { lineId: null, body: 'Actually, one more round — can we revisit the discount?' },
+    { type: 'customer', email: customerActorEmail },
+    { allowedIds: allowedA }
+  );
+
+  const quoteReopened = await prisma.quotation.findFirst({ where: { id: withinCeilingQuote.id } });
+  if (!quoteReopened || quoteReopened.status !== 'negotiating') {
+    throw new Error(`Expected re-opened status 'negotiating' after post-confirm comment, got '${quoteReopened?.status}'`);
+  }
+  const reopenAudit = await prisma.auditLog.count({
+    where: { organizationId: orgA.id, entityType: 'quotation', entityId: withinCeilingQuote.id, action: 'deal_reopened' },
+  });
+  if (reopenAudit === 0) {
+    throw new Error('Missing deal_reopened audit entry for the re-opened deal');
+  }
+
+  // And it can be closed again after the extra review round.
+  const confirmAgain = await negotiationService.confirmQuotation(
+    orgA.id,
+    withinCeilingQuote.id,
+    customerActorEmail,
+    { allowedIds: allowedA }
+  );
+  if (confirmAgain.reenteredApproval || confirmAgain.status !== 'confirmed') {
+    throw new Error(`Re-confirm after re-open should bind the order (got ${confirmAgain.status})`);
+  }
+  const quoteReConfirmed = await prisma.quotation.findFirst({ where: { id: withinCeilingQuote.id } });
+  if (!quoteReConfirmed || quoteReConfirmed.status !== 'confirmed') {
+    throw new Error('Re-confirmed quotation is not in confirmed status');
+  }
+  console.log('✔ Test 6b PASSED: post-confirm customer comment re-opens the deal (negotiating) and it closes again');
+
+  // Internal replies must NOT re-open a confirmed deal.
+  // Reset the quote to confirmed state for this check.
+  await prisma.quotation.update({ where: { id: withinCeilingQuote.id }, data: { status: 'confirmed' } });
+  const managerUser = orgA.users.find((u) => u.role === 'manager') || orgA.users.find((u) => u.role === 'org_admin');
+  if (managerUser) {
+    await negotiationService.addComment(
+      orgA.id,
+      withinCeilingQuote.id,
+      { lineId: null, body: 'Internal note: keeping the deal closed at current terms.' },
+      { type: 'internal', id: managerUser.id, name: managerUser.email, email: managerUser.email }
+    );
+    const quoteStillConfirmed = await prisma.quotation.findFirst({ where: { id: withinCeilingQuote.id } });
+    if (!quoteStillConfirmed || quoteStillConfirmed.status !== 'confirmed') {
+      throw new Error(`SECURITY/LOGIC VIOLATION: internal reply changed status to '${quoteStillConfirmed?.status}'`);
+    }
+    console.log('✔ Test 6c PASSED: internal replies never re-open a confirmed deal');
+  }
+
   // ---------- Test 7: HTTP rate limiting on the confirm endpoint (429) ----------
   const app = createApp();
   const server = http.createServer(app);
@@ -323,7 +377,7 @@ async function runNegotiationIsolationTest() {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
 
-  console.log('\n--- Phase 14 Negotiation & Re-Approval Isolation Suite PASSED (8/8) ---');
+  console.log('\n--- Phase 14 Negotiation & Re-Approval Isolation Suite PASSED (11/11) ---');
 }
 
 runNegotiationIsolationTest()

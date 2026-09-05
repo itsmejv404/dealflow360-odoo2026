@@ -59,7 +59,8 @@ export class ApprovalsService {
         | 'change_request_accepted'
         | 'change_request_declined'
         | 'customer_confirmed'
-        | 'reentered_approval';
+        | 'reentered_approval'
+        | 'deal_reopened';
       reason?: string | null;
       metadata?: any;
     }

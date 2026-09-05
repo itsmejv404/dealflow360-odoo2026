@@ -41,7 +41,9 @@ export class PortalService {
       throw new HttpError(400, 'Customer email is required to dispatch customer portal access link');
     }
 
-    // Sign scoped customer token
+    // Sign scoped customer token — long-lived (30d) so a multi-round
+    // negotiation comfortably outlives the link. Re-sending mints a fresh
+    // token anytime via "Send to Customer".
     const customerToken = signCustomerToken(
       {
         sub: quotation.customerId,
@@ -49,7 +51,7 @@ export class PortalService {
         org_id: orgId,
         quotation_ids: [quotation.id],
       },
-      '7d'
+      '30d'
     );
 
     // Update status to 'sent' if draft/approved
