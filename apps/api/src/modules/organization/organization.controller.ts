@@ -54,6 +54,11 @@ export class OrganizationController {
       let buffer: Buffer;
       let mimeType: string;
 
+      const rejectedMime = (req as any).logoRejectedMime;
+      if (rejectedMime) {
+        throw new HttpError(400, `Unsupported logo type "${rejectedMime}". Allowed: PNG, JPEG, WebP, SVG.`);
+      }
+
       if (file) {
         buffer = file.buffer;
         mimeType = file.mimetype;

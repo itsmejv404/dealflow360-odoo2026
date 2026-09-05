@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import { authStore } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,10 +23,19 @@ import {
   User,
   Package,
   ShieldCheck,
+  Percent,
   FileText,
+  Menu,
+  SlidersHorizontal,
 } from 'lucide-vue-next';
 
 const router = useRouter();
+const route = useRoute();
+
+const isOrgAdmin = computed(() => authStore.state.user?.role === 'org_admin');
+const canApprove = computed(() =>
+  ['manager', 'finance', 'org_admin'].includes(authStore.state.user?.role || '')
+);
 
 onMounted(async () => {
   if (authStore.isAuthenticated()) {
@@ -38,6 +47,15 @@ function handleLogout() {
   authStore.logout();
   router.push('/login');
 }
+
+function isActive(path: string): boolean {
+  if (path === '/') return route.path === '/';
+  return route.path === path || route.path.startsWith(`${path}/`);
+}
+
+const navLinkClass =
+  'px-2.5 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5 whitespace-nowrap';
+const navLinkActiveClass = '!bg-muted !text-foreground font-semibold';
 
 function getRoleDisplay(role?: string): string {
   switch (role) {
@@ -61,113 +79,127 @@ function getRoleDisplay(role?: string): string {
   <div class="min-h-screen bg-background text-foreground flex flex-col">
     <!-- Top Navigation Header -->
     <header class="border-b border-border bg-card/80 backdrop-blur-md sticky top-0 z-30 shadow-xs">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        <!-- Brand & Organization Identity -->
-        <div class="flex items-center gap-6">
-          <div class="flex items-center gap-3">
-            <Avatar class="h-10 w-10 rounded-lg border border-border shadow-xs">
-              <AvatarImage
-                v-if="authStore.state.organization?.logoUrl"
-                :src="authStore.state.organization.logoUrl"
-                :alt="authStore.state.organization?.name || 'Org Logo'"
-                class="object-contain p-1"
-              />
-              <AvatarFallback class="rounded-lg bg-primary text-primary-foreground font-bold">
-                {{ authStore.state.organization?.name?.charAt(0) || 'D' }}
-              </AvatarFallback>
-            </Avatar>
-
-            <div>
-              <div class="flex items-center gap-2">
-                <span class="font-bold text-foreground tracking-tight text-base">
-                  {{ authStore.state.organization?.name || 'DealFlow360' }}
-                </span>
-                <Badge
-                  v-if="authStore.state.organization?.status === 'active'"
-                  variant="outline"
-                  class="bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 text-xs px-2 py-0"
-                >
-                  Active
-                </Badge>
-                <Badge
-                  v-else-if="authStore.state.organization?.status === 'suspended'"
-                  variant="destructive"
-                  class="text-xs px-2 py-0"
-                >
-                  Suspended
-                </Badge>
-              </div>
-              <p class="text-xs text-muted-foreground flex items-center gap-1">
-                <Globe class="w-3 h-3" />
-                {{ authStore.state.organization?.currency || 'USD' }} · {{ authStore.state.organization?.timezone || 'UTC' }}
-              </p>
-            </div>
-          </div>
-
-          <!-- Navigation Links -->
-          <nav class="hidden md:flex items-center gap-1 border-l border-border pl-6">
-            <router-link
-              to="/"
-              class="px-3 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
-              active-class="!bg-muted !text-foreground font-semibold"
-            >
-              <LayoutDashboard class="w-4 h-4" />
-              Workspace Home
-            </router-link>
-
-            <router-link
-              to="/catalog"
-              class="px-3 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
-              active-class="!bg-muted !text-foreground font-semibold"
-            >
-              <Package class="w-4 h-4" />
-              Catalog & Pricing
-            </router-link>
-
-            <router-link
-              to="/quotations"
-              class="px-3 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
-              active-class="!bg-muted !text-foreground font-semibold"
-            >
-              <FileText class="w-4 h-4" />
-              Quotations
-            </router-link>
-
-            <!-- Org Admin Only Navigation -->
-            <router-link
-              v-if="authStore.state.user?.role === 'org_admin'"
-              to="/rulebook"
-              class="px-3 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
-              active-class="!bg-muted !text-foreground font-semibold"
-            >
-              <ShieldCheck class="w-4 h-4" />
-              Discount & Approvals
-            </router-link>
-
-            <router-link
-              v-if="authStore.state.user?.role === 'org_admin'"
-              to="/team"
-              class="px-3 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
-              active-class="!bg-muted !text-foreground font-semibold"
-            >
-              <Users class="w-4 h-4" />
-              Team & Roles
-            </router-link>
-
-            <router-link
-              v-if="authStore.state.user?.role === 'org_admin'"
-              to="/settings/organization"
-              class="px-3 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
-              active-class="!bg-muted !text-foreground font-semibold"
-            >
-              <Settings class="w-4 h-4" />
-              Org Settings
-            </router-link>
-          </nav>
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+        <!-- Brand & Organization Identity (slim) -->
+        <div class="flex items-center gap-2 min-w-0">
+          <Avatar class="h-8 w-8 rounded-lg border border-border shadow-xs shrink-0">
+            <AvatarImage
+              v-if="authStore.state.organization?.logoSrc"
+              :src="authStore.state.organization.logoSrc"
+              :alt="authStore.state.organization?.name || 'Org Logo'"
+              class="object-contain p-0.5"
+            />
+            <AvatarFallback class="rounded-lg bg-primary text-primary-foreground font-bold text-xs">
+              {{ authStore.state.organization?.name?.charAt(0) || 'D' }}
+            </AvatarFallback>
+          </Avatar>
+          <span class="font-bold text-foreground tracking-tight text-sm truncate max-w-[140px] sm:max-w-[200px]">
+            {{ authStore.state.organization?.name || 'DealFlow360' }}
+          </span>
         </div>
 
-        <!-- Right Side: User Menu & Profile -->
-        <div class="flex items-center gap-3">
+        <!-- Primary Navigation (md+) — labels collapse to icons below xl -->
+        <nav class="hidden md:flex items-center gap-0.5 flex-1 justify-center min-w-0">
+          <router-link to="/" :class="[navLinkClass, isActive('/') ? navLinkActiveClass : '']">
+            <LayoutDashboard class="w-4 h-4 shrink-0" />
+            <span class="hidden xl:inline">Dashboard</span>
+          </router-link>
+
+          <router-link to="/catalog" :class="[navLinkClass, isActive('/catalog') ? navLinkActiveClass : '']">
+            <Package class="w-4 h-4 shrink-0" />
+            <span class="hidden xl:inline">Catalog</span>
+          </router-link>
+
+          <router-link to="/quotations" :class="[navLinkClass, isActive('/quotations') ? navLinkActiveClass : '']">
+            <FileText class="w-4 h-4 shrink-0" />
+            <span class="hidden xl:inline">Quotations</span>
+          </router-link>
+
+          <router-link
+            v-if="canApprove"
+            to="/approvals"
+            :class="[navLinkClass, isActive('/approvals') ? navLinkActiveClass : '']"
+          >
+            <ShieldCheck class="w-4 h-4 shrink-0" />
+            <span class="hidden xl:inline">Approvals</span>
+          </router-link>
+
+          <!-- Org Admin: configuration grouped behind one trigger -->
+          <DropdownMenu v-if="isOrgAdmin">
+            <DropdownMenuTrigger as-child>
+              <Button
+                variant="ghost"
+                class="h-8 px-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted rounded-md gap-1.5"
+                :class="['/rulebook', '/team', '/settings/organization'].some((p) => isActive(p)) ? '!bg-muted !text-foreground font-semibold' : ''"
+              >
+                <SlidersHorizontal class="w-4 h-4" />
+                <span class="hidden xl:inline">Administration</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" class="w-52">
+              <DropdownMenuLabel>Organization Setup</DropdownMenuLabel>
+              <DropdownMenuItem @click="router.push('/rulebook')">
+                <Percent class="mr-2 h-4 w-4" />
+                <span>Discount Rulebook</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="router.push('/team')">
+                <Users class="mr-2 h-4 w-4" />
+                <span>Team & Roles</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="router.push('/settings/organization')">
+                <Settings class="mr-2 h-4 w-4" />
+                <span>Org Settings</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </nav>
+
+        <!-- Right Side: user menu + mobile nav -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <!-- Mobile navigation (below md) -->
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button variant="ghost" size="icon" class="md:hidden h-9 w-9">
+                <Menu class="w-5 h-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" class="w-52">
+              <DropdownMenuLabel>Navigation</DropdownMenuLabel>
+              <DropdownMenuItem @click="router.push('/')">
+                <LayoutDashboard class="mr-2 h-4 w-4" />
+                <span>Dashboard</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="router.push('/catalog')">
+                <Package class="mr-2 h-4 w-4" />
+                <span>Catalog</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="router.push('/quotations')">
+                <FileText class="mr-2 h-4 w-4" />
+                <span>Quotations</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem v-if="canApprove" @click="router.push('/approvals')">
+                <ShieldCheck class="mr-2 h-4 w-4" />
+                <span>Approvals</span>
+              </DropdownMenuItem>
+              <template v-if="isOrgAdmin">
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Organization Setup</DropdownMenuLabel>
+                <DropdownMenuItem @click="router.push('/rulebook')">
+                  <Percent class="mr-2 h-4 w-4" />
+                  <span>Discount Rulebook</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="router.push('/team')">
+                  <Users class="mr-2 h-4 w-4" />
+                  <span>Team & Roles</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="router.push('/settings/organization')">
+                  <Settings class="mr-2 h-4 w-4" />
+                  <span>Org Settings</span>
+                </DropdownMenuItem>
+              </template>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
               <Button variant="ghost" class="flex items-center gap-2 pl-2 pr-3 py-1.5 h-auto rounded-lg">
@@ -186,7 +218,7 @@ function getRoleDisplay(role?: string): string {
                 </div>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" class="w-56">
+            <DropdownMenuContent align="end" class="w-60">
               <DropdownMenuLabel class="font-normal">
                 <div class="flex flex-col space-y-1">
                   <p class="text-sm font-medium leading-none">{{ authStore.state.user?.name || 'User' }}</p>
@@ -197,11 +229,38 @@ function getRoleDisplay(role?: string): string {
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem @click="router.push('/settings/organization')">
+              <!-- Organization context (moved out of the header to keep it slim) -->
+              <DropdownMenuLabel class="font-normal">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-xs font-medium text-foreground flex items-center gap-1.5 truncate">
+                    <Building2 class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span class="truncate">{{ authStore.state.organization?.name || 'No organization' }}</span>
+                  </span>
+                  <Badge
+                    v-if="authStore.state.organization?.status === 'suspended'"
+                    variant="destructive"
+                    class="text-2xs px-1.5 py-0"
+                  >
+                    Suspended
+                  </Badge>
+                  <Badge
+                    v-else-if="authStore.state.organization"
+                    variant="outline"
+                    class="bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 text-2xs px-1.5 py-0"
+                  >
+                    Active
+                  </Badge>
+                </div>
+                <p class="text-2xs text-muted-foreground mt-1 flex items-center gap-1">
+                  <Globe class="w-3 h-3" />
+                  {{ authStore.state.organization?.currency || 'USD' }} · {{ authStore.state.organization?.timezone || 'UTC' }}
+                </p>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem v-if="isOrgAdmin" @click="router.push('/settings/organization')">
                 <Settings class="mr-2 h-4 w-4" />
                 <span>Organization Settings</span>
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem class="text-destructive focus:text-destructive" @click="handleLogout">
                 <LogOut class="mr-2 h-4 w-4" />
                 <span>Log out</span>

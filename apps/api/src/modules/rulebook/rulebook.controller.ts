@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { rulebookService } from './rulebook.service.js';
+import { HttpError } from '../../shared/errors.js';
 
 const batchCeilingsSchema = z.object({
   ceilings: z.array(
@@ -26,6 +27,18 @@ const evaluateRuleSchema = z.object({
 });
 
 export class RulebookController {
+  /**
+   * Validates the request body and throws a 400 HttpError (never a raw
+   * ZodError, which would surface as an opaque 500).
+   */
+  private parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
+    const result = schema.safeParse(body);
+    if (!result.success) {
+      throw new HttpError(400, result.error.issues[0]?.message || 'Invalid request payload');
+    }
+    return result.data;
+  }
+
   async getRulebook(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
     const rulebook = await rulebookService.getRulebook(orgId);
@@ -34,21 +47,21 @@ export class RulebookController {
 
   async updateCeilings(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
-    const validated = batchCeilingsSchema.parse(req.body);
+    const validated = this.parseBody(batchCeilingsSchema, req.body);
     const result = await rulebookService.updateCeilings(orgId, validated.ceilings);
     res.json(result);
   }
 
   async updateApprovalChainConfig(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
-    const validated = approvalConfigSchema.parse(req.body);
+    const validated = this.parseBody(approvalConfigSchema, req.body);
     const config = await rulebookService.updateApprovalChainConfig(orgId, validated);
     res.json({ config });
   }
 
   async evaluateRule(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
-    const validated = evaluateRuleSchema.parse(req.body);
+    const validated = this.parseBody(evaluateRuleSchema, req.body);
     const evaluation = await rulebookService.evaluateRule(orgId, validated);
     res.json({ evaluation });
   }

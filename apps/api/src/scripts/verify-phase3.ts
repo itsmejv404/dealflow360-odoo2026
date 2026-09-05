@@ -47,7 +47,7 @@ export async function verifyPhase3() {
 
     // TEST 1: Super Admin Login
     console.log('\n[TEST 1] Super Admin Login');
-    const loginRes = await fetch(`${baseUrl}/platform/auth/login`, {
+    const loginRes = await fetch(`${baseUrl}/api/platform/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -63,7 +63,7 @@ export async function verifyPhase3() {
 
     // TEST 2: Super Admin Creates Organization
     console.log('\n[TEST 2] Super Admin Creates Organization');
-    const createOrgRes = await fetch(`${baseUrl}/platform/organizations`, {
+    const createOrgRes = await fetch(`${baseUrl}/api/platform/organizations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -81,7 +81,7 @@ export async function verifyPhase3() {
     assert.equal(createOrgBody.data.status, 'active');
     console.log(`- Created Organization "${createOrgBody.data.name}" (ID: ${acmeOrgId})`);
 
-    const listOrgRes = await fetch(`${baseUrl}/platform/organizations`, {
+    const listOrgRes = await fetch(`${baseUrl}/api/platform/organizations`, {
       headers: { Authorization: `Bearer ${superAdminToken}` },
     });
     assert.equal(listOrgRes.status, 200);
@@ -92,7 +92,7 @@ export async function verifyPhase3() {
     // TEST 3: Invite Org Admin & Verify Email Delivery via Mailhog
     console.log('\n[TEST 3] Invite Org Admin Flow & Mailhog Delivery');
     const orgAdminEmail = 'admin@acme.com';
-    const inviteRes = await fetch(`${baseUrl}/platform/organizations/${acmeOrgId}/invites`, {
+    const inviteRes = await fetch(`${baseUrl}/api/platform/organizations/${acmeOrgId}/invites`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -158,7 +158,7 @@ export async function verifyPhase3() {
     console.log('- Active organization requests succeed with 200 OK');
 
     // 4b. Super Admin suspends the organization
-    const suspendRes = await fetch(`${baseUrl}/platform/organizations/${acmeOrgId}`, {
+    const suspendRes = await fetch(`${baseUrl}/api/platform/organizations/${acmeOrgId}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -181,7 +181,7 @@ export async function verifyPhase3() {
     console.log('- Suspended organization request immediately blocked with 403 Forbidden');
 
     // 4d. Super Admin still sees suspended org in platform list
-    const orgsListAfterSuspend = await fetch(`${baseUrl}/platform/organizations`, {
+    const orgsListAfterSuspend = await fetch(`${baseUrl}/api/platform/organizations`, {
       headers: { Authorization: `Bearer ${superAdminToken}` },
     });
     const orgsListBody = (await orgsListAfterSuspend.json()) as { data: Array<{ id: string; status: string }> };
@@ -190,14 +190,14 @@ export async function verifyPhase3() {
     console.log('- Super Admin can still view and govern suspended organization');
 
     // 4e. Tenant token cannot access platform endpoints
-    const tenantOnPlatformRes = await fetch(`${baseUrl}/platform/organizations`, {
+    const tenantOnPlatformRes = await fetch(`${baseUrl}/api/platform/organizations`, {
       headers: { Authorization: `Bearer ${acmeToken}` },
     });
     assert.equal(tenantOnPlatformRes.status, 403, 'Tenant token must be rejected on /platform with 403');
     console.log('- Tenant token cannot access platform endpoints (403 Forbidden)');
 
     // 4f. Super Admin reactivates the organization
-    const reactivateRes = await fetch(`${baseUrl}/platform/organizations/${acmeOrgId}`, {
+    const reactivateRes = await fetch(`${baseUrl}/api/platform/organizations/${acmeOrgId}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',

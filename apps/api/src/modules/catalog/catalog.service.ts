@@ -71,6 +71,7 @@ export class CatalogService {
 
     if (existingCatsCount === 0) {
       await prisma.productCategory.createMany({
+        skipDuplicates: true,
         data: [
           {
             organizationId: orgId,
@@ -100,6 +101,7 @@ export class CatalogService {
 
     if (existingTiersCount === 0) {
       await prisma.customerTier.createMany({
+        skipDuplicates: true,
         data: [
           {
             organizationId: orgId,
@@ -323,6 +325,29 @@ export class CatalogService {
 
     if (!tier) {
       throw new HttpError(404, 'Customer tier not found');
+    }
+
+    // Guard against FK-restricted deletes (customers/quotations/price lists/
+    // ceilings all reference the tier). Without this check the delete would
+    // surface as an opaque Prisma P2003 error → 500.
+    const [customerCount, quotationCount, priceListCount, ceilingCount] = await Promise.all([
+      prisma.customer.count({ where: { tierId, organizationId: orgId } }),
+      prisma.quotation.count({ where: { tierId, organizationId: orgId } }),
+      prisma.priceListItem.count({ where: { tierId, organizationId: orgId } }),
+      prisma.discountCeiling.count({ where: { tierId, organizationId: orgId } }),
+    ]);
+
+    const references: string[] = [];
+    if (customerCount > 0) references.push(`${customerCount} customer(s)`);
+    if (quotationCount > 0) references.push(`${quotationCount} quotation(s)`);
+    if (priceListCount > 0) references.push(`${priceListCount} price list item(s)`);
+    if (ceilingCount > 0) references.push(`${ceilingCount} discount ceiling(s)`);
+
+    if (references.length > 0) {
+      throw new HttpError(
+        400,
+        `Cannot delete tier "${tier.name}" because it is referenced by ${references.join(', ')}. Remove or reassign those references first.`
+      );
     }
 
     await prisma.customerTier.delete({
@@ -563,7 +588,7 @@ export class CatalogService {
       where: { id: productId, organizationId: orgId },
       include: {
         _count: {
-          select: { orderLines: true },
+          select: { orderLines: true, quotationLines: true, priceListItems: true },
         },
       },
     });
@@ -572,15 +597,22 @@ export class CatalogService {
       throw new HttpError(404, 'Product not found');
     }
 
-    if (product._count.orderLines > 0) {
+    const referenced =
+      product._count.orderLines > 0 ||
+      product._count.quotationLines > 0 ||
+      product._count.priceListItems > 0;
+
+    if (referenced) {
       // Archive instead of hard delete to preserve historical quote references
+      // (FKs to quotation_lines / price_list_items / order_lines are Restrict).
       await prisma.product.update({
         where: { id: productId },
         data: { status: 'archived' },
       });
-      return { success: true, message: 'Product archived due to existing quotation lines' };
+      return { success: true, message: 'Product archived due to existing quotations or price list references' };
     }
 
+    // Affinity rows cascade (schema: onDelete: Cascade on both product FKs).
     await prisma.product.delete({
       where: { id: productId },
     });

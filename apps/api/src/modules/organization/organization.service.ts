@@ -100,6 +100,16 @@ export class OrganizationService {
       contentType: mimeType,
     });
 
+    // Remove superseded logos in other formats so the old logo can never be
+    // served after a format switch (e.g. png → svg).
+    for (const otherExt of ['png', 'svg', 'jpg', 'webp']) {
+      if (otherExt !== ext) {
+        await storageService.deleteTenantFile(orgId, `logo.${otherExt}`).catch(() => {
+          // Non-fatal: object may not exist
+        });
+      }
+    }
+
     const logoUrl = `/api/organization/logo?ext=${ext}&v=${Date.now()}`;
 
     await prisma.organization.update({
@@ -111,7 +121,24 @@ export class OrganizationService {
   }
 
   async getLogoStream(orgId: string, requestedExt?: string) {
-    const possibleExts = requestedExt ? [requestedExt] : ['png', 'svg', 'jpg', 'webp'];
+    // Prefer the extension recorded on the org's own logoUrl so a format
+    // switch is reflected immediately (a bare request must not resurrect an
+    // older logo.* object from a previous upload).
+    const preferredExts: string[] = [];
+    if (requestedExt) {
+      preferredExts.push(requestedExt);
+    } else {
+      const org = await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { logoUrl: true },
+      });
+      const extMatch = org?.logoUrl?.match(/[?&]ext=([a-z0-9]+)/i);
+      if (extMatch?.[1]) {
+        preferredExts.push(extMatch[1]);
+      }
+    }
+
+    const possibleExts = [...new Set([...preferredExts, 'png', 'svg', 'jpg', 'webp'])];
 
     for (const ext of possibleExts) {
       try {

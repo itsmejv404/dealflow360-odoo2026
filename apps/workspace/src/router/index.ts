@@ -9,6 +9,7 @@ import CatalogView from '../views/CatalogView.vue';
 import RulebookView from '../views/RulebookView.vue';
 import QuotationsView from '../views/QuotationsView.vue';
 import QuotationBuilderView from '../views/QuotationBuilderView.vue';
+import ApprovalsView from '../views/ApprovalsView.vue';
 import SuperAdminLoginView from '../views/SuperAdminLoginView.vue';
 import PlatformPortalView from '../views/PlatformPortalView.vue';
 import { authStore } from '../lib/auth';
@@ -50,7 +51,12 @@ export const router = createRouter({
       path: '/superadmin',
       redirect: '/platform',
     },
-    { path: '/onboarding', name: 'onboarding', component: OnboardingView },
+    {
+      path: '/onboarding',
+      name: 'onboarding',
+      component: OnboardingView,
+      meta: { requiresAdmin: true },
+    },
     { path: '/', name: 'dashboard', component: DashboardView },
     {
       path: '/catalog',
@@ -69,6 +75,11 @@ export const router = createRouter({
       component: QuotationsView,
     },
     {
+      path: '/approvals',
+      name: 'approvals',
+      component: ApprovalsView,
+    },
+    {
       path: '/quotations/:id',
       name: 'quotation-builder',
       component: QuotationBuilderView,
@@ -84,6 +95,11 @@ export const router = createRouter({
       name: 'organization-settings',
       component: OrganizationSettingsView,
       meta: { requiresAdmin: true },
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      redirect: '/',
     },
   ],
 });

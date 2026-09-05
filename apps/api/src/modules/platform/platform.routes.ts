@@ -17,3 +17,5 @@ platformRouter.patch('/organizations/:id', (req, res, next) => platformControlle
 
 platformRouter.post('/organizations/:id/invites', (req, res, next) => platformController.inviteOrgAdmin(req, res, next));
 platformRouter.get('/organizations/:id/invites', (req, res, next) => platformController.listInvites(req, res, next));
+platformRouter.get('/organizations/:id/audit-logs', (req, res, next) => platformController.listAuditLogs(req, res, next));
+

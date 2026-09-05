@@ -1,11 +1,21 @@
+import http from 'http';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
+import { initSocketIO } from './lib/socket.js';
+import { startApprovalNotificationWorker } from './modules/approvals/approvals.worker.js';
 
 const app = createApp();
+const server = http.createServer(app);
 
-const server = app.listen(env.API_PORT, () => {
-  logger.info({ port: env.API_PORT, env: env.NODE_ENV }, 'api listening');
+// Initialize Socket.IO with multi-tenant auth and room isolation
+initSocketIO(server);
+
+// Start BullMQ background workers
+const approvalWorker = startApprovalNotificationWorker();
+
+server.listen(env.API_PORT, () => {
+  logger.info({ port: env.API_PORT, env: env.NODE_ENV }, 'api & realtime socket server listening');
 });
 
 function shutdown(signal: string): void {

@@ -170,6 +170,23 @@ export class PlatformService {
       orderBy: { createdAt: 'desc' },
     });
   }
+
+  async getOrganizationAuditLogs(orgId: string, limit = 100) {
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+    });
+
+    if (!org) {
+      throw new HttpError(404, 'Organization not found');
+    }
+
+    return prisma.auditLog.findMany({
+      where: { organizationId: orgId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
 }
 
 export const platformService = new PlatformService();
+

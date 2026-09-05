@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { quotationsService } from './quotations.service.js';
+import { pricingService } from './pricing.service.js';
+import { emitToOrg, emitToQuote } from '../../lib/socket.js';
 import { HttpError } from '../../shared/errors.js';
 
 const createCustomerSchema = z.object({
@@ -27,18 +29,22 @@ const createQuotationSchema = z.object({
   lines: z.array(quotationLineSchema).min(1, 'Quotation must include at least one product line'),
 });
 
+// Note: `status` is intentionally NOT updatable here — lifecycle transitions
+// (pending_approval / approved / sent / negotiating / confirmed / rejected) are
+// owned exclusively by the approvals and portal services so the approval chain
+// can never be bypassed.
 const updateQuotationSchema = z.object({
   customerId: z.string().uuid().optional(),
   orderDiscountPercent: z.number().min(0).max(100).optional(),
   notes: z.string().max(2000).optional(),
   validUntil: z.string().nullable().optional(),
-  status: z.enum(['draft', 'pending_approval', 'approved', 'sent', 'confirmed', 'rejected']).optional(),
   lines: z.array(quotationLineSchema).optional(),
 });
 
 const calculateQuotationSchema = z.object({
   tierId: z.string().uuid(),
   orderDiscountPercent: z.number().min(0).max(100).optional(),
+  quotationId: z.string().uuid().optional(),
   lines: z.array(quotationLineSchema).min(1),
 });
 
@@ -61,19 +67,30 @@ export class QuotationsController {
     return res.status(201).json({ customer });
   }
 
-  // Live calculation endpoint for rep builder UI
+  // Live calculation endpoint with Redis cache & Socket.IO broadcast
   async calculateLive(req: Request, res: Response) {
     const orgId = req.tenant!.orgId;
     const parsed = calculateQuotationSchema.safeParse(req.body);
     if (!parsed.success) {
       throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid calculation payload');
     }
-    const calculated = await quotationsService.calculateQuotationData(
+
+    const calculated = await pricingService.calculateQuotationPricing(
       orgId,
       parsed.data.tierId,
       parsed.data.lines,
-      parsed.data.orderDiscountPercent || 0
+      parsed.data.orderDiscountPercent || 0,
+      parsed.data.quotationId
     );
+
+    // If quotationId was provided, broadcast update to active quote room
+    if (parsed.data.quotationId) {
+      emitToQuote(orgId, parsed.data.quotationId, 'pricing:updated', {
+        quotationId: parsed.data.quotationId,
+        totals: calculated.totals,
+      });
+    }
+
     return res.json(calculated);
   }
 
@@ -104,12 +121,17 @@ export class QuotationsController {
 
   async createQuotation(req: Request, res: Response) {
     const orgId = req.tenant!.orgId;
-    const userId = req.tenant!.userId || 'system';
+    const repId = req.tenant!.userId;
     const parsed = createQuotationSchema.safeParse(req.body);
     if (!parsed.success) {
       throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid quotation input');
     }
-    const quotation = await quotationsService.createQuotation(orgId, userId, parsed.data);
+
+    const quotation = await quotationsService.createQuotation(orgId, repId, parsed.data);
+
+    // Emit live creation event to organization room
+    emitToOrg(orgId, 'quote:created', { quotation });
+
     return res.status(201).json({ quotation });
   }
 
@@ -119,11 +141,23 @@ export class QuotationsController {
     if (!id) {
       throw new HttpError(400, 'Quotation ID required');
     }
+
     const parsed = updateQuotationSchema.safeParse(req.body);
     if (!parsed.success) {
-      throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid quotation update input');
+      throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid update quotation payload');
     }
-    const quotation = await quotationsService.updateQuotation(orgId, id, parsed.data);
+
+    const tenant = req.tenant!;
+    const quotation = await quotationsService.updateQuotation(orgId, id, parsed.data, {
+      userId: tenant.userId,
+      email: tenant.email,
+      role: tenant.role,
+    });
+
+    // Emit live update events to organization room and quotation room
+    emitToOrg(orgId, 'quote:updated', { quotation });
+    emitToQuote(orgId, id, 'quote:updated', { quotation });
+
     return res.json({ quotation });
   }
 
@@ -133,7 +167,16 @@ export class QuotationsController {
     if (!id) {
       throw new HttpError(400, 'Quotation ID required');
     }
-    const result = await quotationsService.deleteQuotation(orgId, id);
+    const tenant = req.tenant!;
+    const result = await quotationsService.deleteQuotation(orgId, id, {
+      userId: tenant.userId,
+      email: tenant.email,
+      role: tenant.role,
+    });
+
+    // Emit live delete event
+    emitToOrg(orgId, 'quote:deleted', { quotationId: id });
+
     return res.json(result);
   }
 }

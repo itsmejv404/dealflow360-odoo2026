@@ -7,7 +7,7 @@ Guidance for coding agents working in this repo. Read `milestones.md` (24-phase 
 - **Monorepo** via npm workspaces: `apps/*`, `packages/*`. Root `package.json` is private and only orchestrates.
 - **api** (`apps/api`, `@dealflow/api`): Node 24 + Express 4 + TypeScript (ESM, `"type": "module"`). Modular monolith.
 - **workspace** (`apps/workspace`, `@dealflow/workspace`): Vue 3 + Vite + vue-router + **shadcn-vue** (Tailwind v4, reka-ui). Internal app.
-- **portal** (`apps/portal`): second Vue app — **does not exist yet**; scaffold it in Phase 13.
+- **portal** (`apps/portal`, `@dealflow/portal`): second Vue 3 + Vite app (plain Tailwind, no shadcn-vue), served by Nginx under `/portal/` with base `/portal/`. Customer-facing (magic-link JWT `{ org_id, quotation_ids }`). Built in Phase 13; negotiation UI in Phase 14.
 - Postgres 16 (Prisma), Redis 7 (ioredis; BullMQ later), MinIO (AWS SDK v3, path-style), Mailhog, Nginx.
 - Everything runs in Docker with hot reload (`tsx watch`, `vite --host`). Repo is bind-mounted at `/repo`; root `node_modules` is a named volume shared by containers.
 - **No init containers on purpose**: `npm install`, `prisma generate`, MinIO bucket creation, and `migrate deploy` are manual steps — see `SETUP.md`. Compose only starts long-running services.

@@ -56,7 +56,10 @@ async function onSubmit(): Promise<void> {
 
     authStore.setAuth(res.token, res.user, res.organization);
 
-    if (!res.organization.onboardingCompleted) {
+    // Only the Org Admin is walked through organization onboarding — every
+    // other role inherits the org's details and goes straight to the workspace.
+    const isAdmin = res.user?.role === 'org_admin';
+    if (isAdmin && res.organization && !res.organization.onboardingCompleted) {
       router.push('/onboarding');
     } else {
       router.push('/');

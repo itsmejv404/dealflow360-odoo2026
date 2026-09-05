@@ -1,4 +1,4 @@
-import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3 } from './minio.js';
 import { env } from '../config/env.js';
@@ -68,6 +68,18 @@ export class StorageService {
     });
 
     return getSignedUrl(s3, command, { expiresIn });
+  }
+
+  async deleteTenantFile(orgId: string, key: string): Promise<void> {
+    const fullPath = this.getTenantObjectKey(orgId, key);
+
+    const command = new DeleteObjectCommand({
+      Bucket: this.getBucketName(),
+      Key: fullPath,
+    });
+
+    await s3.send(command);
+    logger.info({ orgId, fullPath }, 'Deleted tenant file from MinIO');
   }
 }
 

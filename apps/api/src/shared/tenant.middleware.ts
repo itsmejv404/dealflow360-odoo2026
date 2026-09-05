@@ -45,6 +45,17 @@ export async function tenantContextMiddleware(req: Request, _res: Response, next
       throw new HttpError(403, 'Token does not contain a valid tenant organization context');
     }
 
+    // Token-audience enforcement: super-admin tokens are platform-scoped and
+    // must never resolve a tenant context; customer tokens are only valid for
+    // portal endpoints and carry no internal role.
+    const tokenTyp = (payload as { typ?: string }).typ;
+    if (tokenTyp === 'super_admin') {
+      throw new HttpError(403, 'Super Admin tokens are not valid for tenant-scoped endpoints');
+    }
+    if (tokenTyp === 'customer' && 'role' in payload) {
+      throw new HttpError(403, 'Malformed customer token: internal role claims are not permitted');
+    }
+
     const org = await prisma.organization.findUnique({
       where: { id: payload.org_id },
     });
@@ -57,8 +68,12 @@ export async function tenantContextMiddleware(req: Request, _res: Response, next
       throw new HttpError(403, 'Organization is suspended');
     }
 
+    const isInternal =
+      ('typ' in payload && payload.typ === 'internal') ||
+      (!('typ' in payload) && 'role' in payload);
+
     // If it's an internal user, verify that the user still exists and is active
-    if (payload.sub && 'role' in payload) {
+    if (isInternal) {
       const user = await prisma.user.findUnique({
         where: { id: payload.sub },
       });
@@ -74,7 +89,7 @@ export async function tenantContextMiddleware(req: Request, _res: Response, next
       orgId: org.id,
       userId: payload.sub,
       email: payload.email,
-      role: 'role' in payload ? (payload as InternalJwtPayload).role : undefined,
+      role: isInternal ? (payload as InternalJwtPayload).role : undefined,
       quotationIds: 'quotation_ids' in payload ? (payload as CustomerJwtPayload).quotation_ids : undefined,
     };
 
@@ -121,6 +136,12 @@ export function superAdminGuard(req: Request, _res: Response, next: NextFunction
       payload = verifyJwt<SuperAdminJwtPayload>(token);
     } catch {
       throw new HttpError(401, 'Invalid or expired token');
+    }
+
+    // Token-audience enforcement: internal/customer tokens can never act on
+    // the platform namespace, regardless of payload contents.
+    if ('typ' in payload && payload.typ !== 'super_admin') {
+      throw new HttpError(403, 'Forbidden: Super Admin privileges required');
     }
 
     if (payload.role !== 'super_admin') {

@@ -1,6 +1,8 @@
-import { Prisma } from '@prisma/client';
+﻿import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { HttpError } from '../../shared/errors.js';
+import { pricingService } from './pricing.service.js';
+import { approvalsService } from '../approvals/approvals.service.js';
 
 export interface CreateCustomerInput {
   tierId: string;
@@ -31,8 +33,13 @@ export interface UpdateQuotationInput {
   orderDiscountPercent?: number;
   notes?: string;
   validUntil?: string | null;
-  status?: string;
   lines?: QuotationLineInput[];
+}
+
+export interface AuditActor {
+  userId?: string;
+  email?: string;
+  role?: string;
 }
 
 export class QuotationsService {
@@ -97,140 +104,55 @@ export class QuotationsService {
     });
   }
 
-  // ================= CALCULATION & PRICING =================
+  // ================= QUOTATIONS CRUD =================
 
-  private round2(num: number): number {
-    return Math.round((num + Number.EPSILON) * 100) / 100;
+  /**
+   * Collision-safe quotation numbering: `QT-YYYYMMDD-<per-org daily sequence>`.
+   * The sequence is derived from the highest existing number for today's prefix
+   * within this organization, and creation retries on P2002 races.
+   */
+  private quotationNumberPrefix(now: Date): string {
+    const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+    return `QT-${dateStr}-`;
   }
 
-  private generateQuotationNumber(): string {
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    return `QT-${dateStr}-${randomSuffix}`;
+  private async nextQuotationNumber(orgId: string, now: Date = new Date()): Promise<string> {
+    const prefix = this.quotationNumberPrefix(now);
+    const last = await prisma.quotation.findFirst({
+      where: {
+        organizationId: orgId,
+        quotationNumber: { startsWith: prefix },
+      },
+      orderBy: { quotationNumber: 'desc' },
+      select: { quotationNumber: true },
+    });
+
+    let seq = 1;
+    if (last) {
+      const parsed = parseInt(last.quotationNumber.slice(prefix.length), 10);
+      if (!Number.isNaN(parsed) && parsed >= 1) {
+        seq = parsed + 1;
+      }
+    }
+
+    return `${prefix}${String(seq).padStart(4, '0')}`;
   }
 
   async calculateQuotationData(
     orgId: string,
     tierId: string,
     rawLines: QuotationLineInput[],
-    orderDiscountPercent: number = 0
+    orderDiscountPercent: number = 0,
+    quotationId?: string
   ) {
-    if (!rawLines || rawLines.length === 0) {
-      throw new HttpError(400, 'Quotation must have at least one product line');
-    }
-
-    const productIds = rawLines.map((l) => l.productId);
-    const [products, priceListItems] = await Promise.all([
-      prisma.product.findMany({
-        where: { id: { in: productIds }, organizationId: orgId },
-        include: { category: true },
-      }),
-      prisma.priceListItem.findMany({
-        where: {
-          productId: { in: productIds },
-          tierId,
-          organizationId: orgId,
-        },
-      }),
-    ]);
-
-    const productMap = new Map(products.map((p) => [p.id, p]));
-    const priceMap = new Map(priceListItems.map((pli) => [pli.productId, Number(pli.customPrice)]));
-
-    const tier = await prisma.customerTier.findFirst({
-      where: { id: tierId, organizationId: orgId },
-    });
-    const tierDefaultDiscount = Number(tier?.defaultDiscountPercent || 0);
-
-    let subtotal = 0;
-    let totalLineDiscount = 0;
-    let totalCost = 0;
-    let oneTimeTotal = 0;
-    let recurringMonthlyTotal = 0;
-    let recurringAnnualTotal = 0;
-
-    const computedLines = rawLines.map((lineInput) => {
-      const product = productMap.get(lineInput.productId);
-      if (!product) {
-        throw new HttpError(400, `Product ${lineInput.productId} not found in this organization`);
-      }
-
-      const quantity = Math.max(1, Math.floor(lineInput.quantity || 1));
-      const costPrice = product.costPrice ? Number(product.costPrice) : 0;
-
-      let unitPrice: number;
-      if (lineInput.unitPrice !== undefined && lineInput.unitPrice >= 0) {
-        unitPrice = Number(lineInput.unitPrice);
-      } else if (priceMap.has(product.id)) {
-        unitPrice = priceMap.get(product.id)!;
-      } else {
-        const base = Number(product.price);
-        unitPrice = tierDefaultDiscount > 0 ? this.round2(base * (1 - tierDefaultDiscount / 100)) : base;
-      }
-
-      const lineDiscountPct = Math.min(100, Math.max(0, lineInput.lineDiscountPercent ?? 0));
-      const lineGross = this.round2(quantity * unitPrice);
-      const lineDiscountAmt = this.round2(lineGross * (lineDiscountPct / 100));
-      const lineNet = this.round2(lineGross - lineDiscountAmt);
-      const lineCost = this.round2(quantity * costPrice);
-      const lineMarginAmt = this.round2(lineNet - lineCost);
-      const lineMarginPct = lineNet > 0 ? this.round2((lineMarginAmt / lineNet) * 100) : 0;
-
-      subtotal += lineGross;
-      totalLineDiscount += lineDiscountAmt;
-      totalCost += lineCost;
-
-      if (product.billingFrequency === 'monthly') {
-        recurringMonthlyTotal += lineNet;
-      } else if (product.billingFrequency === 'annual') {
-        recurringAnnualTotal += lineNet;
-      } else {
-        oneTimeTotal += lineNet;
-      }
-
-      return {
-        productId: product.id,
-        categoryId: product.categoryId,
-        quantity,
-        unitPrice,
-        costPrice,
-        lineDiscountPercent: lineDiscountPct,
-        lineDiscountAmount: lineDiscountAmt,
-        subtotal: lineGross,
-        total: lineNet,
-        marginAmount: lineMarginAmt,
-        marginPercent: lineMarginPct,
-        billingFrequency: product.billingFrequency,
-      };
-    });
-
-    const netBeforeOrderDiscount = this.round2(subtotal - totalLineDiscount);
-    const orderDiscountPct = Math.min(100, Math.max(0, orderDiscountPercent));
-    const orderDiscountAmt = this.round2(netBeforeOrderDiscount * (orderDiscountPct / 100));
-    const totalAmount = this.round2(netBeforeOrderDiscount - orderDiscountAmt);
-    const totalDiscount = this.round2(totalLineDiscount + orderDiscountAmt);
-    const totalMargin = this.round2(totalAmount - totalCost);
-    const totalMarginPercent = totalAmount > 0 ? this.round2((totalMargin / totalAmount) * 100) : 0;
-
-    return {
-      computedLines,
-      totals: {
-        orderDiscountPercent: orderDiscountPct,
-        orderDiscountAmount: orderDiscountAmt,
-        subtotal: this.round2(subtotal),
-        totalDiscount,
-        totalAmount,
-        totalCost: this.round2(totalCost),
-        totalMargin,
-        totalMarginPercent,
-        oneTimeTotal: this.round2(oneTimeTotal),
-        recurringMonthlyTotal: this.round2(recurringMonthlyTotal),
-        recurringAnnualTotal: this.round2(recurringAnnualTotal),
-      },
-    };
+    return pricingService.calculateQuotationPricing(
+      orgId,
+      tierId,
+      rawLines,
+      orderDiscountPercent,
+      quotationId
+    );
   }
-
-  // ================= QUOTATIONS CRUD =================
 
   async listQuotations(
     orgId: string,
@@ -304,7 +226,7 @@ export class QuotationsService {
               select: { id: true, name: true, code: true },
             },
           },
-          orderBy: { createdAt: 'asc' },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         },
       },
     });
@@ -316,7 +238,7 @@ export class QuotationsService {
     return quotation;
   }
 
-  async createQuotation(orgId: string, userId: string, data: CreateQuotationInput) {
+  async createQuotation(orgId: string, userId: string | undefined, data: CreateQuotationInput) {
     const customer = await prisma.customer.findFirst({
       where: { id: data.customerId, organizationId: orgId },
     });
@@ -325,82 +247,115 @@ export class QuotationsService {
       throw new HttpError(400, 'Invalid customer selected for this organization');
     }
 
-    const { computedLines, totals } = await this.calculateQuotationData(
+    const { computedLines, totals, risk } = await this.calculateQuotationData(
       orgId,
       customer.tierId,
       data.lines,
       data.orderDiscountPercent || 0
     );
 
-    const quotationNumber = this.generateQuotationNumber();
+    const MAX_ATTEMPTS = 5;
 
-    return prisma.$transaction(async (tx) => {
-      const quotation = await tx.quotation.create({
-        data: {
-          organizationId: orgId,
-          quotationNumber,
-          customerId: customer.id,
-          tierId: customer.tierId,
-          repId: userId,
-          status: 'draft',
-          orderDiscountPercent: new Prisma.Decimal(totals.orderDiscountPercent),
-          orderDiscountAmount: new Prisma.Decimal(totals.orderDiscountAmount),
-          subtotal: new Prisma.Decimal(totals.subtotal),
-          totalDiscount: new Prisma.Decimal(totals.totalDiscount),
-          totalAmount: new Prisma.Decimal(totals.totalAmount),
-          totalCost: new Prisma.Decimal(totals.totalCost),
-          totalMargin: new Prisma.Decimal(totals.totalMargin),
-          totalMarginPercent: new Prisma.Decimal(totals.totalMarginPercent),
-          oneTimeTotal: new Prisma.Decimal(totals.oneTimeTotal),
-          recurringMonthlyTotal: new Prisma.Decimal(totals.recurringMonthlyTotal),
-          recurringAnnualTotal: new Prisma.Decimal(totals.recurringAnnualTotal),
-          notes: data.notes?.trim(),
-          validUntil: data.validUntil ? new Date(data.validUntil) : null,
-        },
-      });
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        const quotationNumber = await this.nextQuotationNumber(orgId);
 
-      if (computedLines.length > 0) {
-        await tx.quotationLine.createMany({
-          data: computedLines.map((line) => ({
-            organizationId: orgId,
-            quotationId: quotation.id,
-            productId: line.productId,
-            categoryId: line.categoryId,
-            quantity: line.quantity,
-            unitPrice: new Prisma.Decimal(line.unitPrice),
-            costPrice: new Prisma.Decimal(line.costPrice),
-            lineDiscountPercent: new Prisma.Decimal(line.lineDiscountPercent),
-            lineDiscountAmount: new Prisma.Decimal(line.lineDiscountAmount),
-            subtotal: new Prisma.Decimal(line.subtotal),
-            total: new Prisma.Decimal(line.total),
-            marginAmount: new Prisma.Decimal(line.marginAmount),
-            marginPercent: new Prisma.Decimal(line.marginPercent),
-            billingFrequency: line.billingFrequency,
-          })),
-        });
-      }
-
-      return tx.quotation.findUnique({
-        where: { id: quotation.id },
-        include: {
-          customer: { include: { tier: true } },
-          tier: true,
-          rep: { select: { id: true, name: true, email: true } },
-          lines: {
-            include: {
-              product: true,
-              category: true,
+        return await prisma.$transaction(async (tx) => {
+          const quotation = await tx.quotation.create({
+            data: {
+              organizationId: orgId,
+              quotationNumber,
+              customerId: customer.id,
+              tierId: customer.tierId,
+              repId: userId,
+              status: 'draft',
+              orderDiscountPercent: new Prisma.Decimal(totals.orderDiscountPercent),
+              orderDiscountAmount: new Prisma.Decimal(totals.orderDiscountAmount),
+              subtotal: new Prisma.Decimal(totals.subtotal),
+              totalDiscount: new Prisma.Decimal(totals.totalDiscount),
+              totalAmount: new Prisma.Decimal(totals.totalAmount),
+              totalCost: new Prisma.Decimal(totals.totalCost),
+              totalMargin: new Prisma.Decimal(totals.totalMargin),
+              totalMarginPercent: new Prisma.Decimal(totals.totalMarginPercent),
+              oneTimeTotal: new Prisma.Decimal(totals.oneTimeTotal),
+              recurringMonthlyTotal: new Prisma.Decimal(totals.recurringMonthlyTotal),
+              recurringAnnualTotal: new Prisma.Decimal(totals.recurringAnnualTotal),
+              riskScore: new Prisma.Decimal(risk.riskScore),
+              riskLevel: risk.riskLevel,
+              approvalRouting: risk.approvalRouting,
+              riskDetails: risk as unknown as Prisma.InputJsonValue,
+              notes: data.notes?.trim(),
+              validUntil: data.validUntil ? new Date(data.validUntil) : null,
             },
-          },
-        },
-      });
-    });
+          });
+
+          if (computedLines.length > 0) {
+            await tx.quotationLine.createMany({
+              data: computedLines.map((line) => ({
+                organizationId: orgId,
+                quotationId: quotation.id,
+                productId: line.productId,
+                categoryId: line.categoryId,
+                quantity: line.quantity,
+                unitPrice: new Prisma.Decimal(line.unitPrice),
+                costPrice: new Prisma.Decimal(line.costPrice),
+                lineDiscountPercent: new Prisma.Decimal(line.lineDiscountPercent),
+                lineDiscountAmount: new Prisma.Decimal(line.lineDiscountAmount),
+                subtotal: new Prisma.Decimal(line.subtotal),
+                total: new Prisma.Decimal(line.total),
+                marginAmount: new Prisma.Decimal(line.marginAmount),
+                marginPercent: new Prisma.Decimal(line.marginPercent),
+                appliedCeilingPercent: new Prisma.Decimal(line.appliedCeilingPercent ?? 0),
+                riskDeltaPercent: new Prisma.Decimal(line.riskDeltaPercent ?? 0),
+                isOverCeiling: line.isOverCeiling ?? false,
+                billingFrequency: line.billingFrequency,
+              })),
+            });
+          }
+
+          return tx.quotation.findUnique({
+            where: { id: quotation.id },
+            include: {
+              customer: { include: { tier: true } },
+              tier: true,
+              rep: { select: { id: true, name: true, email: true } },
+              lines: {
+                include: {
+                  product: true,
+                  category: true,
+                },
+              },
+            },
+          });
+        });
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          // Unique violation on (organizationId, quotationNumber) — another
+          // concurrent creation claimed the sequence; retry with the next number.
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw new HttpError(
+      409,
+      'Could not allocate a unique quotation number due to concurrent creation. Please retry.'
+    );
   }
 
-  async updateQuotation(orgId: string, quotationId: string, data: UpdateQuotationInput) {
+  async updateQuotation(
+    orgId: string,
+    quotationId: string,
+    data: UpdateQuotationInput,
+    actor?: AuditActor
+  ) {
     const existing = await prisma.quotation.findFirst({
       where: { id: quotationId, organizationId: orgId },
-      include: { lines: true },
+      include: { lines: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
     });
 
     if (!existing) {
@@ -431,37 +386,64 @@ export class QuotationsService {
             lineDiscountPercent: Number(l.lineDiscountPercent),
           }));
 
-    const { computedLines, totals } = await this.calculateQuotationData(
+    const { computedLines, totals, risk } = await this.calculateQuotationData(
       orgId,
       customer.tierId,
       linesToCompute,
-      orderDiscountPercent
+      orderDiscountPercent,
+      quotationId
     );
 
-    return prisma.$transaction(async (tx) => {
+    const updated = await prisma.$transaction(async (tx) => {
       if (data.lines !== undefined) {
-        await tx.quotationLine.deleteMany({
-          where: { quotationId, organizationId: orgId },
+        // Position-based sync: existing rows are updated in place so their IDs
+        // stay stable — negotiation comments/counters/change-requests reference
+        // line IDs and must not be cascade-deleted on every edit. Only rows
+        // beyond the new length are removed (lines dropped from the quote).
+        const lineData = (line: (typeof computedLines)[number]) => ({
+          productId: line.productId,
+          categoryId: line.categoryId,
+          quantity: line.quantity,
+          unitPrice: new Prisma.Decimal(line.unitPrice),
+          costPrice: new Prisma.Decimal(line.costPrice),
+          lineDiscountPercent: new Prisma.Decimal(line.lineDiscountPercent),
+          lineDiscountAmount: new Prisma.Decimal(line.lineDiscountAmount),
+          subtotal: new Prisma.Decimal(line.subtotal),
+          total: new Prisma.Decimal(line.total),
+          marginAmount: new Prisma.Decimal(line.marginAmount),
+          marginPercent: new Prisma.Decimal(line.marginPercent),
+          appliedCeilingPercent: new Prisma.Decimal(line.appliedCeilingPercent ?? 0),
+          riskDeltaPercent: new Prisma.Decimal(line.riskDeltaPercent ?? 0),
+          isOverCeiling: line.isOverCeiling ?? false,
+          billingFrequency: line.billingFrequency,
         });
 
-        await tx.quotationLine.createMany({
-          data: computedLines.map((line) => ({
-            organizationId: orgId,
-            quotationId,
-            productId: line.productId,
-            categoryId: line.categoryId,
-            quantity: line.quantity,
-            unitPrice: new Prisma.Decimal(line.unitPrice),
-            costPrice: new Prisma.Decimal(line.costPrice),
-            lineDiscountPercent: new Prisma.Decimal(line.lineDiscountPercent),
-            lineDiscountAmount: new Prisma.Decimal(line.lineDiscountAmount),
-            subtotal: new Prisma.Decimal(line.subtotal),
-            total: new Prisma.Decimal(line.total),
-            marginAmount: new Prisma.Decimal(line.marginAmount),
-            marginPercent: new Prisma.Decimal(line.marginPercent),
-            billingFrequency: line.billingFrequency,
-          })),
-        });
+        const existingLines = existing.lines;
+        const keepCount = Math.min(existingLines.length, computedLines.length);
+
+        for (let i = 0; i < keepCount; i++) {
+          await tx.quotationLine.update({
+            where: { id: existingLines[i]!.id },
+            data: lineData(computedLines[i]!),
+          });
+        }
+
+        for (let i = keepCount; i < computedLines.length; i++) {
+          await tx.quotationLine.create({
+            data: {
+              organizationId: orgId,
+              quotationId,
+              ...lineData(computedLines[i]!),
+            },
+          });
+        }
+
+        if (existingLines.length > computedLines.length) {
+          const removedIds = existingLines.slice(computedLines.length).map((l) => l.id);
+          await tx.quotationLine.deleteMany({
+            where: { id: { in: removedIds }, organizationId: orgId },
+          });
+        }
       }
 
       const updated = await tx.quotation.update({
@@ -469,7 +451,6 @@ export class QuotationsService {
         data: {
           customerId: customer.id,
           tierId: customer.tierId,
-          ...(data.status && { status: data.status }),
           ...(data.notes !== undefined && { notes: data.notes?.trim() }),
           ...(data.validUntil !== undefined && {
             validUntil: data.validUntil ? new Date(data.validUntil) : null,
@@ -485,6 +466,10 @@ export class QuotationsService {
           oneTimeTotal: new Prisma.Decimal(totals.oneTimeTotal),
           recurringMonthlyTotal: new Prisma.Decimal(totals.recurringMonthlyTotal),
           recurringAnnualTotal: new Prisma.Decimal(totals.recurringAnnualTotal),
+          riskScore: new Prisma.Decimal(risk.riskScore),
+          riskLevel: risk.riskLevel,
+          approvalRouting: risk.approvalRouting,
+          riskDetails: risk as unknown as Prisma.InputJsonValue,
         },
         include: {
           customer: { include: { tier: true } },
@@ -501,9 +486,23 @@ export class QuotationsService {
 
       return updated;
     });
+
+    await approvalsService.logAudit(orgId, {
+      entityType: 'quotation',
+      entityId: quotationId,
+      user:
+        actor && actor.userId && actor.email && actor.role
+          ? { userId: actor.userId, email: actor.email, role: actor.role }
+          : null,
+      action: 'updated',
+      reason: 'Quotation updated via quotation builder',
+      metadata: { fieldsChanged: Object.keys(data) },
+    });
+
+    return updated;
   }
 
-  async deleteQuotation(orgId: string, quotationId: string) {
+  async deleteQuotation(orgId: string, quotationId: string, actor?: AuditActor) {
     const existing = await prisma.quotation.findFirst({
       where: { id: quotationId, organizationId: orgId },
     });
@@ -512,8 +511,37 @@ export class QuotationsService {
       throw new HttpError(404, 'Quotation not found');
     }
 
-    await prisma.quotation.delete({
-      where: { id: quotationId },
+    const deletableStatuses = new Set(['draft', 'rejected']);
+    if (!deletableStatuses.has(existing.status)) {
+      throw new HttpError(
+        409,
+        `Quotation in '${existing.status}' status cannot be deleted. Only draft or rejected quotations may be removed.`
+      );
+    }
+
+    await prisma.$transaction([
+      prisma.quotationLine.deleteMany({
+        where: { quotationId, organizationId: orgId },
+      }),
+      prisma.quotation.delete({
+        where: { id: quotationId },
+      }),
+    ]);
+
+    await approvalsService.logAudit(orgId, {
+      entityType: 'quotation',
+      entityId: quotationId,
+      user:
+        actor && actor.userId && actor.email && actor.role
+          ? { userId: actor.userId, email: actor.email, role: actor.role }
+          : null,
+      action: 'deleted',
+      reason: `Deleted quotation ${existing.quotationNumber} (${existing.status})`,
+      metadata: {
+        quotationNumber: existing.quotationNumber,
+        previousStatus: existing.status,
+        totalAmount: Number(existing.totalAmount),
+      },
     });
 
     return { success: true };

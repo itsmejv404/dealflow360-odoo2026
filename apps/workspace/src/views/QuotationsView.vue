@@ -8,6 +8,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   Table,
   TableBody,
   TableCell,
@@ -30,6 +37,8 @@ import {
   Calendar,
   DollarSign,
   TrendingUp,
+  AlertCircle,
+  Users,
 } from 'lucide-vue-next';
 
 const router = useRouter();
@@ -82,6 +91,45 @@ const errorMessage = ref<string | null>(null);
 const searchQuery = ref('');
 const statusFilter = ref('');
 
+// ---- Customer-first quotation creation ----
+// A quotation is always built FOR a customer request — the flow starts by
+// picking the customer, never from an empty builder.
+const isCustomerPickerOpen = ref(false);
+const isLoadingCustomers = ref(false);
+const customers = ref<Customer[]>([]);
+const customerSearch = ref('');
+
+const filteredCustomers = computed(() => {
+  const q = customerSearch.value.trim().toLowerCase();
+  if (!q) return customers.value;
+  return customers.value.filter(
+    (c) =>
+      c.name.toLowerCase().includes(q) ||
+      c.email.toLowerCase().includes(q) ||
+      (c.company && c.company.toLowerCase().includes(q))
+  );
+});
+
+async function openCustomerPicker() {
+  isCustomerPickerOpen.value = true;
+  customerSearch.value = '';
+  if (customers.value.length > 0) return;
+  isLoadingCustomers.value = true;
+  try {
+    const res = await apiRequest<{ customers: Customer[] }>('/api/quotations/customers');
+    customers.value = res.customers || [];
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to load customers';
+  } finally {
+    isLoadingCustomers.value = false;
+  }
+}
+
+function startQuoteForCustomer(customer: Customer) {
+  isCustomerPickerOpen.value = false;
+  router.push(`/quotations/new?customer=${customer.id}`);
+}
+
 const filteredQuotations = computed(() => {
   return quotations.value.filter((q) => {
     if (statusFilter.value && q.status !== statusFilter.value) return false;
@@ -126,6 +174,8 @@ function getStatusBadge(status: string) {
       return { variant: 'outline', label: 'Approved', class: 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300' };
     case 'sent':
       return { variant: 'outline', label: 'Sent to Customer', class: 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300' };
+    case 'negotiating':
+      return { variant: 'outline', label: 'Under Negotiation', class: 'bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-300' };
     case 'confirmed':
       return { variant: 'default', label: 'Confirmed (Won)', class: 'bg-primary text-primary-foreground' };
     case 'rejected':
@@ -172,11 +222,23 @@ onMounted(() => {
         </div>
 
         <div class="flex items-center gap-2">
-          <Button @click="router.push('/quotations/new')" class="shadow-xs font-semibold">
+          <Button @click="openCustomerPicker" class="shadow-xs font-semibold">
             <Plus class="w-4 h-4 mr-1.5" />
             New Quotation
           </Button>
         </div>
+      </div>
+
+      <!-- Load error banner -->
+      <div
+        v-if="errorMessage"
+        class="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs"
+      >
+        <AlertCircle class="w-4 h-4 shrink-0 mt-0.5" />
+        <span>{{ errorMessage }}</span>
+        <Button variant="ghost" size="sm" class="h-5 ml-auto text-xs" @click="loadQuotations">
+          Retry
+        </Button>
       </div>
 
       <!-- Quick Metrics Grid -->
@@ -261,6 +323,7 @@ onMounted(() => {
                 <option value="pending_approval">Pending Approval</option>
                 <option value="approved">Approved</option>
                 <option value="sent">Sent</option>
+                <option value="negotiating">Under Negotiation</option>
                 <option value="confirmed">Confirmed</option>
                 <option value="rejected">Rejected</option>
               </select>
@@ -279,16 +342,16 @@ onMounted(() => {
             </div>
             <h3 class="text-base font-semibold text-foreground">No quotations found</h3>
             <p class="text-xs text-muted-foreground max-w-sm mx-auto">
-              {{ searchQuery || statusFilter ? 'Try clearing your search filters.' : 'Get started by creating your first quotation.' }}
+              {{ searchQuery || statusFilter ? 'Try clearing your search filters.' : 'Quotations start from a customer — pick a customer request to build for.' }}
             </p>
             <Button
               v-if="!searchQuery && !statusFilter"
-              @click="router.push('/quotations/new')"
+              @click="openCustomerPicker"
               size="sm"
               class="mt-2"
             >
               <Plus class="w-4 h-4 mr-1.5" />
-              Create Quotation
+              New Quotation for a Customer
             </Button>
           </div>
 
@@ -370,6 +433,63 @@ onMounted(() => {
           </div>
         </CardContent>
       </Card>
+
+      <!-- Customer Request Picker: quotations always start from a customer -->
+      <Dialog :open="isCustomerPickerOpen" @update:open="isCustomerPickerOpen = $event">
+        <DialogContent class="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle class="flex items-center gap-2 text-base">
+              <Users class="w-4 h-4 text-primary" />
+              New Quotation for a Customer Request
+            </DialogTitle>
+            <DialogDescription class="text-xs">
+              Select the customer whose request you are quoting. Their requirement
+              details will appear beside the builder.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div class="relative">
+            <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              v-model="customerSearch"
+              placeholder="Search customers by name, email or company..."
+              class="pl-9 h-9 text-xs"
+            />
+          </div>
+
+          <div class="max-h-72 overflow-y-auto space-y-1.5 -mx-1 px-1">
+            <div v-if="isLoadingCustomers" class="py-8 text-center text-xs text-muted-foreground">
+              Loading customers...
+            </div>
+            <div
+              v-else-if="filteredCustomers.length === 0"
+              class="py-8 text-center text-xs text-muted-foreground"
+            >
+              No customers match "{{ customerSearch }}".
+            </div>
+            <button
+              v-for="customer in filteredCustomers"
+              :key="customer.id"
+              class="w-full text-left p-3 rounded-lg border border-border bg-card hover:border-primary/50 hover:bg-muted/20 transition-colors flex items-center justify-between gap-3 group"
+              @click="startQuoteForCustomer(customer)"
+            >
+              <div class="min-w-0">
+                <div class="text-xs font-semibold text-foreground truncate">{{ customer.name }}</div>
+                <div class="text-2xs text-muted-foreground truncate">
+                  {{ customer.company ? `${customer.company} · ` : '' }}{{ customer.email }}
+                </div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <Badge v-if="customer.tier" variant="outline" class="text-2xs">{{ customer.tier.name }}</Badge>
+                <Button size="sm" class="h-7 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Plus class="w-3 h-3 mr-1" />
+                  Build Quote
+                </Button>
+              </div>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   </WorkspaceLayout>
 </template>

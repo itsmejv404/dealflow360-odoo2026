@@ -8,12 +8,11 @@ export async function seedAll() {
   console.log('--- SEEDING DEALFLOW360 DATABASE ---');
   console.log('========================================\n');
 
-  // 1. Clean Database
-  await prisma.organizationInvite.deleteMany({});
-  await prisma.orderLine.deleteMany({});
-  await prisma.product.deleteMany({});
-  await prisma.user.deleteMany({});
+  // 1. Clean Database — organizations cascade to every tenant-owned table
+  // (products, quotations, lines, price lists, approvals, audit logs, ...).
+  // Deleting children first would violate Restrict FKs once quotations exist.
   await prisma.organization.deleteMany({});
+  await prisma.user.deleteMany({});
 
   // 2. Super Admin Account
   const superAdminPassword = 'SuperAdminSecret123!';
@@ -102,21 +101,94 @@ export async function seedAll() {
     },
   });
 
+  // Categories for Acme
+  const acmeHwCat = await prisma.productCategory.create({
+    data: { organizationId: acme.id, name: 'Hardware', code: 'hardware' },
+  });
+  const acmeSvcCat = await prisma.productCategory.create({
+    data: { organizationId: acme.id, name: 'Services', code: 'services' },
+  });
+  const acmeSubCat = await prisma.productCategory.create({
+    data: { organizationId: acme.id, name: 'Subscriptions', code: 'subscriptions' },
+  });
+
+  // Tiers for Acme
+  const acmeTierGold = await prisma.customerTier.create({
+    data: { organizationId: acme.id, name: 'Gold Partner', code: 'gold', defaultDiscountPercent: 15, rank: 3 },
+  });
+  const acmeTierSilver = await prisma.customerTier.create({
+    data: { organizationId: acme.id, name: 'Silver Partner', code: 'silver', defaultDiscountPercent: 10, rank: 2 },
+  });
+  const acmeTierBronze = await prisma.customerTier.create({
+    data: { organizationId: acme.id, name: 'Bronze', code: 'bronze', defaultDiscountPercent: 5, rank: 1 },
+  });
+
+  // Customer for Acme
+  const acmeCustomer = await prisma.customer.create({
+    data: {
+      organizationId: acme.id,
+      tierId: acmeTierGold.id,
+      name: 'Stark Industries',
+      email: 'procurement@starkindustries.com',
+      company: 'Stark Industries LLC',
+    },
+  });
+
   const acmeProduct1 = await prisma.product.create({
     data: {
       organizationId: acme.id,
+      categoryId: acmeHwCat.id,
       name: 'Acme Industrial Server Rack X1',
       sku: 'ACME-SRV-X1',
       price: 2500.0,
+      costPrice: 1500.0,
+      billingFrequency: 'one_time',
     },
   });
 
   const acmeProduct2 = await prisma.product.create({
     data: {
       organizationId: acme.id,
+      categoryId: acmeSvcCat.id,
       name: 'Acme 24/7 Premium Enterprise Support',
       sku: 'ACME-SUPP-ENT',
       price: 600.0,
+      costPrice: 150.0,
+      billingFrequency: 'monthly',
+    },
+  });
+
+  const acmeProduct3 = await prisma.product.create({
+    data: {
+      organizationId: acme.id,
+      categoryId: acmeHwCat.id,
+      name: 'Acme Fiber High-Density Cable Management Kit',
+      sku: 'ACME-ACC-CAB',
+      price: 350.0,
+      costPrice: 90.0,
+      billingFrequency: 'one_time',
+    },
+  });
+
+  const acmeProduct4 = await prisma.product.create({
+    data: {
+      organizationId: acme.id,
+      categoryId: acmeSubCat.id,
+      name: 'Acme Cloud Monitoring Suite (Annual)',
+      sku: 'ACME-SUB-MON',
+      price: 1800.0,
+      costPrice: 400.0,
+      billingFrequency: 'annual',
+    },
+  });
+
+  // Custom Tier Price for Acme
+  await prisma.priceListItem.create({
+    data: {
+      organizationId: acme.id,
+      tierId: acmeTierGold.id,
+      productId: acmeProduct1.id,
+      customPrice: 2100.0,
     },
   });
 
@@ -125,11 +197,45 @@ export async function seedAll() {
       organizationId: acme.id,
       productId: acmeProduct1.id,
       quantity: 2,
-      unitPrice: 2500.0,
+      unitPrice: 2100.0,
     },
   });
 
-  console.log('✔ Seeded Org 1: Acme Corp with 5 Roles (admin/rep/manager/finance/ops@acme.com) — Password: Password123!');
+  // Seed Product Affinities for Acme
+  await prisma.productAffinity.create({
+    data: {
+      organizationId: acme.id,
+      productId: acmeProduct1.id,
+      recommendedProductId: acmeProduct2.id,
+      coPurchaseCount: 42,
+      affinityScore: 0.88,
+      recommendationReason: 'Co-purchased in 88% of deals with Server Rack X1',
+    },
+  });
+
+  await prisma.productAffinity.create({
+    data: {
+      organizationId: acme.id,
+      productId: acmeProduct1.id,
+      recommendedProductId: acmeProduct3.id,
+      coPurchaseCount: 29,
+      affinityScore: 0.72,
+      recommendationReason: 'Popular hardware bundle addon (72% co-purchase rate)',
+    },
+  });
+
+  await prisma.productAffinity.create({
+    data: {
+      organizationId: acme.id,
+      productId: acmeProduct1.id,
+      recommendedProductId: acmeProduct4.id,
+      coPurchaseCount: 18,
+      affinityScore: 0.58,
+      recommendationReason: 'Recommended high-margin annual subscription add-on',
+    },
+  });
+
+  console.log('✔ Seeded Org 1: Acme Corp with Products & Co-Purchase Affinities');
 
   // 4. Org 2: Globex Corporation
   const globex = await prisma.organization.create({
@@ -178,12 +284,51 @@ export async function seedAll() {
     });
   }
 
+  // Categories for Globex
+  const globexHwCat = await prisma.productCategory.create({
+    data: { organizationId: globex.id, name: 'Hardware', code: 'hardware' },
+  });
+  const globexSvcCat = await prisma.productCategory.create({
+    data: { organizationId: globex.id, name: 'Services', code: 'services' },
+  });
+
+  // Tiers for Globex
+  const globexTierTier1 = await prisma.customerTier.create({
+    data: { organizationId: globex.id, name: 'Tier 1 Enterprise', code: 'tier1', defaultDiscountPercent: 20, rank: 1 },
+  });
+
+  // Customer for Globex
+  const globexCustomer = await prisma.customer.create({
+    data: {
+      organizationId: globex.id,
+      tierId: globexTierTier1.id,
+      name: 'Wayne Enterprises',
+      email: 'procurement@waynecorp.com',
+      company: 'Wayne Enterprises Europe',
+    },
+  });
+
   const globexProduct1 = await prisma.product.create({
     data: {
       organizationId: globex.id,
+      categoryId: globexHwCat.id,
       name: 'Globex Quantum Cluster Node',
       sku: 'GLBX-QNTM-01',
       price: 4800.0,
+      costPrice: 3000.0,
+      billingFrequency: 'one_time',
+    },
+  });
+
+  const globexProduct2 = await prisma.product.create({
+    data: {
+      organizationId: globex.id,
+      categoryId: globexSvcCat.id,
+      name: 'Globex Quantum Fiber Interconnect',
+      sku: 'GLBX-FIBR-01',
+      price: 1200.0,
+      costPrice: 400.0,
+      billingFrequency: 'one_time',
     },
   });
 
@@ -196,7 +341,19 @@ export async function seedAll() {
     },
   });
 
-  console.log('✔ Seeded Org 2: Globex Corporation with 5 Roles (admin/rep/manager/finance/ops@globex.com) — Password: Password123!');
+  // Globex product affinity
+  await prisma.productAffinity.create({
+    data: {
+      organizationId: globex.id,
+      productId: globexProduct1.id,
+      recommendedProductId: globexProduct2.id,
+      coPurchaseCount: 35,
+      affinityScore: 0.91,
+      recommendationReason: 'Frequently deployed with Quantum Cluster (91% affinity)',
+    },
+  });
+
+  console.log('✔ Seeded Org 2: Globex Corporation with Products & Co-Purchase Affinities');
 
   // 5. Org 3: Apex Dynamics (Pending Onboarding with Active Invite Token)
   const apex = await prisma.organization.create({

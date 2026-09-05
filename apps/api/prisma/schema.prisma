@@ -43,6 +43,12 @@ model Organization {
   customers           Customer[]
   quotations          Quotation[]
   quotationLines      QuotationLine[]
+  affinities          ProductAffinity[]
+  approvalRequests    ApprovalRequest[]
+  auditLogs           AuditLog[]
+  negotiationComments NegotiationComment[]
+  changeRequests      ChangeRequest[]
+  counterProposals    CounterProposal[]
 
   @@map("organizations")
 }
@@ -60,6 +66,11 @@ model User {
 
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   quotations   Quotation[]
+  requestedApprovals ApprovalRequest[] @relation("ApprovalRequestedBy")
+  actionedApprovals  ApprovalRequest[] @relation("ApprovalActionedBy")
+  negotiationComments   NegotiationComment[] @relation("NegotiationAuthor")
+  resolvedChangeRequests ChangeRequest[]     @relation("ChangeRequestResolvedBy")
+  decidedCounterProposals CounterProposal[]  @relation("CounterProposalDecidedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -145,6 +156,8 @@ model Product {
   orderLines     OrderLine[]
   priceListItems PriceListItem[]
   quotationLines QuotationLine[]
+  primaryAffinities      ProductAffinity[] @relation("PrimaryAffinity")
+  recommendedAffinities  ProductAffinity[] @relation("RecommendedAffinity")
 
   @@unique([organizationId, id])
   @@unique([organizationId, sku])
@@ -259,7 +272,7 @@ model Quotation {
   customerId           String          @map("customer_id")
   tierId               String          @map("tier_id")
   repId                String?         @map("rep_id")
-  status               String          @default("draft") // "draft" | "pending_approval" | "approved" | "sent" | "confirmed" | "rejected"
+  status               String          @default("draft") // "draft" | "pending_approval" | "approved" | "sent" | "negotiating" | "confirmed" | "rejected"
   orderDiscountPercent Decimal         @default(0.00) @map("order_discount_percent") @db.Decimal(5, 2)
   orderDiscountAmount  Decimal         @default(0.00) @map("order_discount_amount") @db.Decimal(12, 2)
   subtotal             Decimal         @default(0.00) @db.Decimal(12, 2)
@@ -271,6 +284,10 @@ model Quotation {
   oneTimeTotal         Decimal         @default(0.00) @map("one_time_total") @db.Decimal(12, 2)
   recurringMonthlyTotal Decimal        @default(0.00) @map("recurring_monthly_total") @db.Decimal(12, 2)
   recurringAnnualTotal  Decimal        @default(0.00) @map("recurring_annual_total") @db.Decimal(12, 2)
+  riskScore            Decimal         @default(0.00) @map("risk_score") @db.Decimal(5, 2)
+  riskLevel            String          @default("low") @map("risk_level") // "low" | "medium" | "high"
+  approvalRouting      String          @default("none") @map("approval_routing") // "none" | "manager" | "manager_finance"
+  riskDetails          Json?           @map("risk_details")
   notes                String?
   validUntil           DateTime?       @map("valid_until")
   createdAt            DateTime        @default(now()) @map("created_at")
@@ -281,12 +298,17 @@ model Quotation {
   tier         CustomerTier    @relation(fields: [organizationId, tierId], references: [organizationId, id], onDelete: Restrict)
   rep          User?           @relation(fields: [repId], references: [id], onDelete: SetNull)
   lines        QuotationLine[]
+  approvalRequests ApprovalRequest[]
+  negotiationComments NegotiationComment[]
+  changeRequests      ChangeRequest[]
+  counterProposals    CounterProposal[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, quotationNumber])
   @@index([organizationId])
   @@index([organizationId, customerId])
   @@index([organizationId, status])
+  @@index([organizationId, riskLevel])
   @@map("quotations")
 }
 
@@ -305,6 +327,9 @@ model QuotationLine {
   total                Decimal          @default(0.00) @db.Decimal(12, 2)
   marginAmount         Decimal          @default(0.00) @map("margin_amount") @db.Decimal(12, 2)
   marginPercent        Decimal          @default(0.00) @map("margin_percent") @db.Decimal(5, 2)
+  appliedCeilingPercent Decimal         @default(0.00) @map("applied_ceiling_percent") @db.Decimal(5, 2)
+  riskDeltaPercent     Decimal          @default(0.00) @map("risk_delta_percent") @db.Decimal(5, 2)
+  isOverCeiling        Boolean          @default(false) @map("is_over_ceiling")
   billingFrequency     String           @default("one_time") @map("billing_frequency") // "one_time" | "monthly" | "quarterly" | "annual"
   createdAt            DateTime         @default(now()) @map("created_at")
   updatedAt            DateTime         @updatedAt @map("updated_at")
@@ -313,6 +338,9 @@ model QuotationLine {
   quotation    Quotation        @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
   product      Product          @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Restrict)
   category     ProductCategory? @relation(fields: [organizationId, categoryId], references: [organizationId, id], onDelete: SetNull)
+  negotiationComments NegotiationComment[]
+  changeRequests      ChangeRequest[]
+  counterProposals    CounterProposal[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -320,4 +348,161 @@ model QuotationLine {
   @@index([organizationId, productId])
   @@map("quotation_lines")
 }
+
+model ProductAffinity {
+  id                    String   @id @default(uuid())
+  organizationId        String   @map("organization_id")
+  productId             String   @map("product_id")
+  recommendedProductId  String   @map("recommended_product_id")
+  coPurchaseCount       Int      @default(1) @map("co_purchase_count")
+  affinityScore         Decimal  @default(0.0000) @map("affinity_score") @db.Decimal(5, 4)
+  recommendationReason  String?  @map("recommendation_reason")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product               Product      @relation("PrimaryAffinity", fields: [organizationId, productId], references: [organizationId, id], onDelete: Cascade)
+  recommendedProduct    Product      @relation("RecommendedAffinity", fields: [organizationId, recommendedProductId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, productId, recommendedProductId])
+  @@index([organizationId])
+  @@index([organizationId, productId])
+  @@index([organizationId, recommendedProductId])
+  @@map("product_affinities")
+}
+
+model ApprovalRequest {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  quotationId    String    @map("quotation_id")
+  stage          String    // "manager" | "finance"
+  status         String    @default("pending") // "pending" | "approved" | "rejected" | "escalated" | "superseded"
+  assignedRole   String    @map("assigned_role") // "manager" | "finance"
+  requestedById  String?   @map("requested_by_id")
+  actionedById   String?   @map("actioned_by_id")
+  reason         String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  actionedAt     DateTime? @map("actioned_at")
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation      Quotation    @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
+  requestedBy    User?        @relation("ApprovalRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  actionedBy     User?        @relation("ApprovalActionedBy", fields: [actionedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([organizationId, quotationId])
+  @@index([organizationId, status])
+  @@index([organizationId, stage, status])
+  @@map("approval_requests")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  entityType     String   @map("entity_type") // "quotation" | "rulebook" | "user" | "organization"
+  entityId       String   @map("entity_id")
+  userId         String?  @map("user_id")
+  userEmail      String?  @map("user_email")
+  userRole       String?  @map("user_role")
+  action         String   // "created" | "updated" | "deleted" | "submitted_for_approval" | "manager_approved" | "finance_escalated" | "finance_approved" | "rejected" | "edited" | "auto_approved" | "sent_to_customer" | "customer_commented" | "change_requested" | "counter_proposed" | "counter_accepted" | "counter_declined" | "change_request_accepted" | "change_request_declined" | "customer_confirmed" | "reentered_approval"
+  reason         String?
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+// ==================== PHASE 14 — NEGOTIATION & RE-APPROVAL ====================
+
+model NegotiationComment {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  quotationId    String   @map("quotation_id")
+  lineId         String?  @map("line_id")
+  authorType     String   @default("customer") @map("author_type") // "customer" | "internal"
+  authorId       String?  @map("author_id")
+  authorName     String   @map("author_name")
+  authorEmail    String?  @map("author_email")
+  body           String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation    Quotation      @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
+  line         QuotationLine? @relation(fields: [organizationId, lineId], references: [organizationId, id], onDelete: Cascade)
+  author       User?          @relation("NegotiationAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([organizationId, quotationId, createdAt])
+  @@index([organizationId, lineId])
+  @@map("negotiation_comments")
+}
+
+model ChangeRequest {
+  id                      String    @id @default(uuid())
+  organizationId          String    @map("organization_id")
+  quotationId             String    @map("quotation_id")
+  lineId                  String?   @map("line_id")
+  requestType             String    @map("request_type") // "quantity_change" | "remove_line" | "discount_change" | "other"
+  proposedQuantity        Int?      @map("proposed_quantity")
+  proposedDiscountPercent Decimal?  @map("proposed_discount_percent") @db.Decimal(5, 2)
+  note                    String?
+  status                  String    @default("open") @map("status") // "open" | "accepted" | "declined" | "applied"
+  requestedByType         String    @default("customer") @map("requested_by_type")
+  requestedByName         String    @map("requested_by_name")
+  requestedByEmail        String?   @map("requested_by_email")
+  resolvedById            String?   @map("resolved_by_id")
+  resolvedAt              DateTime? @map("resolved_at")
+  resolutionNote          String?   @map("resolution_note")
+  createdAt               DateTime  @default(now()) @map("created_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation    Quotation      @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
+  line         QuotationLine? @relation(fields: [organizationId, lineId], references: [organizationId, id], onDelete: Cascade)
+  resolvedBy   User?          @relation("ChangeRequestResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([organizationId, quotationId, status])
+  @@index([organizationId, lineId])
+  @@map("change_requests")
+}
+
+model CounterProposal {
+  id                      String    @id @default(uuid())
+  organizationId          String    @map("organization_id")
+  quotationId             String    @map("quotation_id")
+  lineId                  String?   @map("line_id") // null = order-level counter-discount
+  proposedDiscountPercent Decimal   @map("proposed_discount_percent") @db.Decimal(5, 2)
+  note                    String?
+  status                  String    @default("open") @map("status") // "open" | "accepted" | "declined" | "superseded"
+  proposedByType          String    @default("customer") @map("proposed_by_type")
+  proposedByName          String    @map("proposed_by_name")
+  proposedByEmail         String?   @map("proposed_by_email")
+  decidedById             String?   @map("decided_by_id")
+  decidedAt               DateTime? @map("decided_at")
+  decisionNote            String?   @map("decision_note")
+  createdAt               DateTime  @default(now()) @map("created_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation    Quotation      @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
+  line         QuotationLine? @relation(fields: [organizationId, lineId], references: [organizationId, id], onDelete: Cascade)
+  decidedBy    User?          @relation("CounterProposalDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([organizationId, quotationId, status])
+  @@index([organizationId, lineId])
+  @@map("counter_proposals")
+}
+
 

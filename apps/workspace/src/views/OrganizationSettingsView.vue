@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import WorkspaceLayout from '@/components/layout/WorkspaceLayout.vue';
 import { apiRequest } from '@/lib/api';
-import { authStore, type OrganizationProfile } from '@/lib/auth';
+import { authStore, validateLogoFile, type OrganizationProfile } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -80,8 +80,8 @@ onMounted(async () => {
     form.value.website = profile.website || '';
     form.value.currency = profile.currency || 'USD';
     form.value.timezone = profile.timezone || 'UTC';
-    if (profile.logoUrl) {
-      logoPreview.value = profile.logoUrl;
+    if (profile.logoUrl && profile.logoSrc) {
+      logoPreview.value = profile.logoSrc;
     }
   }
 });
@@ -90,6 +90,14 @@ function handleFileChange(event: Event) {
   const target = event.target as HTMLInputElement;
   if (target.files && target.files[0]) {
     const file = target.files[0];
+    const validationError = validateLogoFile(file);
+    if (validationError) {
+      errorMessage.value = validationError;
+      logoFile.value = null;
+      target.value = '';
+      return;
+    }
+    errorMessage.value = '';
     logoFile.value = file;
     logoPreview.value = URL.createObjectURL(file);
   }
@@ -107,6 +115,12 @@ async function handleUploadLogo() {
       body: formData,
     });
     authStore.updateOrg({ logoUrl: result.logoUrl });
+    const logoSrc = await authStore.refreshLogo();
+    if (logoSrc) {
+      logoPreview.value = logoSrc;
+    } else {
+      errorMessage.value = 'Logo was stored, but the live preview could not be refreshed. Reload the page to see it in the header.';
+    }
     successMessage.value = 'Logo uploaded and updated successfully!';
     setTimeout(() => { successMessage.value = ''; }, 3000);
   } catch (err: any) {

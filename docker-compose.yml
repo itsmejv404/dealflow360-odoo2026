@@ -80,6 +80,9 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
+      JWT_SECRET: ${JWT_SECRET:-dealflow360-super-secret-key-for-dev-only}
+      SOCKET_CORS_ORIGINS: ${SOCKET_CORS_ORIGINS:-http://localhost,http://localhost:5173,http://localhost:5174}
+      PORTAL_URL: ${PORTAL_URL:-http://localhost}
     ports:
       - "3000:3000"
     volumes:
@@ -104,12 +107,25 @@ services:
       - node_modules:/repo/node_modules
     networks: [dealflow]
 
+  portal:
+    build:
+      context: .
+      dockerfile: apps/portal/Dockerfile
+    ports:
+      - "5174:5174"
+    volumes:
+      - .:/repo
+      - node_modules:/repo/node_modules
+    networks: [dealflow]
+
   nginx:
     image: nginx:1.27-alpine
     depends_on:
       api:
         condition: service_started
       workspace:
+        condition: service_started
+      portal:
         condition: service_started
     ports:
       - "80:80"

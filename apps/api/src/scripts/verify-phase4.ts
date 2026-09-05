@@ -40,7 +40,7 @@ export async function verifyPhase4() {
 
     // 1. Super Admin creates Apex Dynamics
     console.log('[STEP 1] Super Admin Creates Organization');
-    const orgRes = await fetch(`${baseUrl}/platform/organizations`, {
+    const orgRes = await fetch(`${baseUrl}/api/platform/organizations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -55,7 +55,7 @@ export async function verifyPhase4() {
 
     // 2. Super Admin invites Org Admin
     console.log('\n[STEP 2] Super Admin Invites Org Admin');
-    const inviteRes = await fetch(`${baseUrl}/platform/organizations/${orgId}/invites`, {
+    const inviteRes = await fetch(`${baseUrl}/api/platform/organizations/${orgId}/invites`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

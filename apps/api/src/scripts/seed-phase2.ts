@@ -4,12 +4,14 @@ import { signInternalToken } from '../shared/jwt.js';
 export async function seedPhase2() {
   console.log('--- Seeding Phase 2 Multi-Tenant Data ---');
 
-  // Clean existing demo data
-  await prisma.orderLine.deleteMany({});
-  await prisma.product.deleteMany({});
+  // Clean existing demo data — delete the orgs FIRST so their products,
+  // order lines and quotation lines cascade (products are FK-restricted by
+  // quotation_lines, so wiping products before orgs violates the constraint).
   await prisma.organization.deleteMany({
     where: { slug: { in: ['acme', 'globex'] } },
   });
+  await prisma.orderLine.deleteMany({});
+  await prisma.product.deleteMany({});
 
   // 1. Create Org A: Acme Corp
   const acme = await prisma.organization.create({

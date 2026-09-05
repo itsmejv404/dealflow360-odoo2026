@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { apiRequest } from '@/lib/api';
-import { authStore, type OrganizationProfile } from '@/lib/auth';
+import { authStore, validateLogoFile, type OrganizationProfile } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -90,6 +90,12 @@ onMounted(async () => {
     router.push('/login');
     return;
   }
+  // Organization onboarding belongs to the Org Admin alone — other roles
+  // inherit the organization's details and never maintain them.
+  if (authStore.state.user?.role !== 'org_admin') {
+    router.push('/');
+    return;
+  }
   const org = await authStore.fetchProfile();
   if (org) {
     profile.value.address = org.address || '';
@@ -99,8 +105,8 @@ onMounted(async () => {
     profile.value.website = org.website || '';
     profile.value.currency = org.currency || 'USD';
     profile.value.timezone = org.timezone || 'UTC';
-    if (org.logoUrl) {
-      logoPreview.value = org.logoUrl;
+    if (org.logoUrl && org.logoSrc) {
+      logoPreview.value = org.logoSrc;
     }
   }
 });
@@ -109,6 +115,15 @@ function handleFileChange(event: Event) {
   const target = event.target as HTMLInputElement;
   if (target.files && target.files[0]) {
     const file = target.files[0];
+    const validationError = validateLogoFile(file);
+    if (validationError) {
+      // Reject before upload with a precise message instead of an opaque 500/413.
+      errorMessage.value = validationError;
+      logoFile.value = null;
+      target.value = '';
+      return;
+    }
+    errorMessage.value = '';
     logoFile.value = file;
     logoPreview.value = URL.createObjectURL(file);
   }
@@ -123,6 +138,7 @@ async function uploadLogoIfPresent(): Promise<void> {
     body: formData,
   });
   authStore.updateOrg({ logoUrl: result.logoUrl });
+  await authStore.refreshLogo();
 }
 
 async function nextStep() {

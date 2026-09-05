@@ -27,6 +27,12 @@ import {
   LogOut,
   CheckCircle2,
   AlertTriangle,
+  History,
+  FileText,
+  UserCheck,
+  Clock,
+  ExternalLink,
+  ShieldCheck,
 } from 'lucide-vue-next';
 
 interface OrgCount {
@@ -34,6 +40,23 @@ interface OrgCount {
   products: number;
   orderLines: number;
   invites: number;
+}
+
+interface AuditLogEntry {
+  id: string;
+  quotationId?: string | null;
+  action: string;
+  actorId?: string | null;
+  actorName?: string | null;
+  actorEmail?: string | null;
+  actorRole?: string | null;
+  reason?: string | null;
+  metadata?: any;
+  createdAt: string;
+  quotation?: {
+    quotationNumber: string;
+    title: string;
+  } | null;
 }
 
 interface Organization {
@@ -59,6 +82,43 @@ const isCreating = ref(false);
 const inviteData = reactive({ orgId: '', email: '' });
 const isInviting = ref(false);
 const latestInviteToken = ref<string | null>(null);
+
+// Audit Log Inspection Modal
+const selectedOrgForAudit = ref<Organization | null>(null);
+const auditLogs = ref<AuditLogEntry[]>([]);
+const isLoadingAuditLogs = ref(false);
+const isAuditModalOpen = ref(false);
+
+async function openAuditModal(org: Organization) {
+  selectedOrgForAudit.value = org;
+  isAuditModalOpen.value = true;
+  isLoadingAuditLogs.value = true;
+  auditLogs.value = [];
+  try {
+    const res = await apiRequest<AuditLogEntry[]>(`/api/platform/organizations/${org.id}/audit-logs`);
+    auditLogs.value = res;
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to fetch tenant audit logs';
+  } finally {
+    isLoadingAuditLogs.value = false;
+  }
+}
+
+function closeAuditModal() {
+  isAuditModalOpen.value = false;
+  selectedOrgForAudit.value = null;
+  auditLogs.value = [];
+}
+
+function formatDate(isoStr: string) {
+  return new Date(isoStr).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 async function loadOrganizations() {
   isLoading.value = true;
@@ -387,16 +447,28 @@ onMounted(async () => {
                   <td class="p-3 text-muted-foreground">{{ org._count?.products ?? '-' }}</td>
                   <td class="p-3 text-muted-foreground">{{ org._count?.invites ?? '-' }}</td>
                   <td class="p-3 text-right">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      class="h-7 text-xs"
-                      :class="org.status === 'active' ? 'text-destructive hover:bg-destructive/10' : 'text-emerald-600 hover:bg-emerald-500/10'"
-                      @click="toggleOrgStatus(org)"
-                    >
-                      <Power class="w-3 h-3 mr-1" />
-                      {{ org.status === 'active' ? 'Suspend' : 'Reactivate' }}
-                    </Button>
+                    <div class="flex items-center justify-end gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-7 text-xs border-border hover:bg-muted text-foreground"
+                        @click="openAuditModal(org)"
+                        title="View Compliance Audit Trail"
+                      >
+                        <History class="w-3 h-3 mr-1 text-primary" />
+                        Audit Trail
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="h-7 text-xs"
+                        :class="org.status === 'active' ? 'text-destructive hover:bg-destructive/10' : 'text-emerald-600 hover:bg-emerald-500/10'"
+                        @click="toggleOrgStatus(org)"
+                      >
+                        <Power class="w-3 h-3 mr-1" />
+                        {{ org.status === 'active' ? 'Suspend' : 'Reactivate' }}
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -405,5 +477,94 @@ onMounted(async () => {
         </CardContent>
       </Card>
     </main>
+
+    <!-- Super Admin Tenant Audit Logs Modal -->
+    <div
+      v-if="isAuditModalOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+    >
+      <div class="bg-card border border-border rounded-xl shadow-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in-0 zoom-in-95 duration-150">
+        <div class="px-6 py-4 border-b border-border flex items-center justify-between bg-muted/40">
+          <div class="flex items-center gap-2.5">
+            <div class="p-2 rounded-lg bg-primary/10 text-primary">
+              <ShieldCheck class="w-5 h-5" />
+            </div>
+            <div>
+              <h3 class="font-bold text-sm tracking-tight flex items-center gap-2">
+                Tenant Audit Trail — {{ selectedOrgForAudit?.name }}
+                <Badge variant="outline" class="font-mono text-[10px] uppercase">
+                  {{ selectedOrgForAudit?.slug }}
+                </Badge>
+              </h3>
+              <p class="text-xs text-muted-foreground">Immutable compliance and approval timeline for this tenant</p>
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" class="h-8 px-2" @click="closeAuditModal">
+            ✕
+          </Button>
+        </div>
+
+        <div class="p-6 overflow-y-auto flex-1 space-y-4">
+          <div v-if="isLoadingAuditLogs" class="text-center py-12 text-muted-foreground text-xs">
+            <RefreshCw class="w-5 h-5 animate-spin mx-auto mb-2 text-primary" />
+            Loading tenant audit records...
+          </div>
+          <div v-else-if="auditLogs.length === 0" class="text-center py-12 text-muted-foreground text-xs">
+            <FileText class="w-8 h-8 mx-auto mb-2 opacity-40" />
+            No audit records found for this organization.
+          </div>
+          <div v-else class="space-y-3">
+            <div
+              v-for="log in auditLogs"
+              :key="log.id"
+              class="border border-border/80 rounded-lg p-3.5 bg-background/60 hover:bg-muted/30 transition-colors space-y-1.5 text-xs"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <Badge variant="secondary" class="font-mono uppercase text-[10px] px-1.5 py-0">
+                    {{ log.action }}
+                  </Badge>
+                  <span v-if="log.quotation" class="font-semibold text-foreground">
+                    Quotation {{ log.quotation.quotationNumber }} ({{ log.quotation.title }})
+                  </span>
+                </div>
+                <div class="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Clock class="w-3 h-3" />
+                  <span>{{ formatDate(log.createdAt) }}</span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2 text-muted-foreground">
+                <UserCheck class="w-3.5 h-3.5 text-primary" />
+                <span class="font-medium text-foreground">{{ log.actorName || log.actorEmail || 'System/Unknown' }}</span>
+                <span v-if="log.actorRole" class="text-[10px] uppercase font-mono px-1 rounded bg-muted">
+                  ({{ log.actorRole }})
+                </span>
+                <span v-if="log.actorEmail && log.actorName" class="text-muted-foreground">
+                  &lt;{{ log.actorEmail }}&gt;
+                </span>
+              </div>
+
+              <div v-if="log.reason" class="rounded bg-muted/50 p-2 border border-border/40 text-foreground italic">
+                "{{ log.reason }}"
+              </div>
+
+              <div v-if="log.metadata && Object.keys(log.metadata).length > 0" class="text-[11px] font-mono text-muted-foreground bg-muted/30 rounded p-1.5 overflow-x-auto">
+                {{ JSON.stringify(log.metadata) }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-6 py-3 border-t border-border flex justify-between items-center bg-muted/20">
+          <span class="text-xs text-muted-foreground">
+            {{ auditLogs.length }} audit records logged
+          </span>
+          <Button size="sm" variant="outline" class="h-8 text-xs" @click="closeAuditModal">
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

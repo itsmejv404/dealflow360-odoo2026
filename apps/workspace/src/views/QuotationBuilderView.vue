@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted, reactive, computed, watch } from 'vue';
+import { ref, onMounted, onUnmounted, reactive, computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import WorkspaceLayout from '../components/layout/WorkspaceLayout.vue';
+import UpsellPanel, { type UpsellSuggestionItem } from '../components/quotations/UpsellPanel.vue';
+import RiskScoreBadge from '../components/quotations/RiskScoreBadge.vue';
+import AuditTrailTimeline from '../components/quotations/AuditTrailTimeline.vue';
 import { apiRequest } from '../lib/api';
+import { getSocket } from '../lib/socket';
+import { authStore } from '../lib/auth';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
@@ -38,6 +44,14 @@ import {
   Sparkles,
   RotateCcw,
   Tag,
+  Radio,
+  Send,
+  ShieldCheck,
+  History,
+  XCircle,
+  MessagesSquare,
+  ArrowLeftRight,
+  FileEdit,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -58,6 +72,8 @@ interface Customer {
   name: string;
   email: string;
   company?: string;
+  phone?: string;
+  address?: string;
   tierId: string;
   tier?: CustomerTier;
 }
@@ -83,6 +99,9 @@ interface QuotationLineState {
   total: number;
   marginAmount: number;
   marginPercent: number;
+  appliedCeilingPercent?: number;
+  riskDeltaPercent?: number;
+  isOverCeiling?: boolean;
   billingFrequency: string;
 }
 
@@ -98,6 +117,17 @@ interface QuotationTotals {
   oneTimeTotal: number;
   recurringMonthlyTotal: number;
   recurringAnnualTotal: number;
+}
+
+interface RiskState {
+  riskScore: number;
+  riskLevel: 'low' | 'medium' | 'high';
+  approvalRouting: 'none' | 'manager' | 'manager_finance';
+  routingReason: string;
+  hasLineOverCeiling: boolean;
+  overCeilingLineCount: number;
+  totalLines: number;
+  lines: any[];
 }
 
 // State
@@ -136,6 +166,21 @@ const totals = reactive<QuotationTotals>({
   recurringMonthlyTotal: 0,
   recurringAnnualTotal: 0,
 });
+
+const risk = reactive<RiskState>({
+  riskScore: 0,
+  riskLevel: 'low',
+  approvalRouting: 'none',
+  routingReason: 'All lines comply with rulebook ceilings.',
+  hasLineOverCeiling: false,
+  overCeilingLineCount: 0,
+  totalLines: 0,
+  lines: [],
+});
+
+// Upsell / Cross-Sell State
+const suggestions = ref<UpsellSuggestionItem[]>([]);
+const isSuggestionsLoading = ref(false);
 
 // Quick Add Customer Dialog
 const isCustomerDialogOpen = ref(false);
@@ -185,14 +230,121 @@ async function loadInitialData() {
     if (isEditMode.value) {
       await loadQuotation(quoteId.value!);
     } else {
-      if (customers.value.length > 0 && customers.value[0]) {
-        selectedCustomerId.value = customers.value[0].id;
+      // Customer-first creation: the builder opens for a specific customer
+      // request (?customer=<id> from the customer picker). Never preselect an
+      // arbitrary customer.
+      const requestedCustomerId = typeof route.query.customer === 'string' ? route.query.customer : '';
+      if (requestedCustomerId && customers.value.some((c) => c.id === requestedCustomerId)) {
+        selectedCustomerId.value = requestedCustomerId;
       }
     }
   } catch (err: any) {
     errorMessage.value = err.message || 'Failed to load builder data';
   } finally {
     isLoading.value = false;
+  }
+}
+
+// Audit Trail & Approval Actions State
+const auditLogs = ref<any[]>([]);
+const isAuditLoading = ref(false);
+const isSubmittingApproval = ref(false);
+const submitNotes = ref('');
+const isSubmitDialogOpen = ref(false);
+
+const isApproverActionDialogOpen = ref(false);
+const approverActionType = ref<'approve' | 'reject'>('approve');
+const approverReason = ref('');
+const isProcessingApproverAction = ref(false);
+
+// Customer Portal Magic Link State
+const isSendingToCustomer = ref(false);
+const isSendCustomerDialogOpen = ref(false);
+const generatedPortalUrl = ref<string | null>(null);
+const dispatchedRecipientEmail = ref<string | null>(null);
+
+async function handleSendToCustomer() {
+  if (!quoteId.value) return;
+  isSendingToCustomer.value = true;
+  errorMessage.value = null;
+  generatedPortalUrl.value = null;
+
+  try {
+    const res = await apiRequest<{
+      success: boolean;
+      portalUrl: string;
+      customerEmail: string;
+      status: string;
+    }>(`/api/portal/send/${quoteId.value}`, {
+      method: 'POST',
+    });
+
+    generatedPortalUrl.value = res.portalUrl;
+    dispatchedRecipientEmail.value = res.customerEmail;
+    quotationStatus.value = res.status;
+    isSendCustomerDialogOpen.value = true;
+    successMessage.value = `Quotation magic link dispatched to ${res.customerEmail}`;
+
+    await loadQuotation(quoteId.value);
+    await loadAuditTrail(quoteId.value);
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to send quotation to customer';
+  } finally {
+    isSendingToCustomer.value = false;
+  }
+}
+
+async function loadAuditTrail(quotationId: string) {
+  isAuditLoading.value = true;
+  try {
+    const res = await apiRequest<{ auditTrail: any[] }>(`/api/approvals/quotation/${quotationId}/audit`);
+    auditLogs.value = res.auditTrail || [];
+  } catch (err) {
+    console.warn('Failed to load audit trail:', err);
+  } finally {
+    isAuditLoading.value = false;
+  }
+}
+
+async function handleSubmitForApproval() {
+  if (!quoteId.value) return;
+  isSubmittingApproval.value = true;
+  errorMessage.value = null;
+  try {
+    const res = await apiRequest<any>(`/api/approvals/submit/${quoteId.value}`, {
+      method: 'POST',
+      body: JSON.stringify({ notes: submitNotes.value.trim() }),
+    });
+    isSubmitDialogOpen.value = false;
+    submitNotes.value = '';
+    successMessage.value = res.message || 'Quotation submitted for review.';
+    await loadQuotation(quoteId.value);
+    await loadAuditTrail(quoteId.value);
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to submit quotation for approval';
+  } finally {
+    isSubmittingApproval.value = false;
+  }
+}
+
+async function handleDirectApproverAction() {
+  if (!quoteId.value || !approverReason.value.trim()) return;
+  isProcessingApproverAction.value = true;
+  errorMessage.value = null;
+  try {
+    const res = await apiRequest<any>(`/api/approvals/${approverActionType.value}/${quoteId.value}`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: approverReason.value.trim() }),
+    });
+    isApproverActionDialogOpen.value = false;
+    approverReason.value = '';
+    successMessage.value = res.message || `Quotation ${approverActionType.value}d successfully.`;
+    await loadQuotation(quoteId.value);
+    await loadAuditTrail(quoteId.value);
+  } catch (err: any) {
+    errorMessage.value = err.message || `Failed to ${approverActionType.value} quotation`;
+  } finally {
+    isProcessingApproverAction.value = false;
   }
 }
 
@@ -216,6 +368,9 @@ async function loadQuotation(id: string) {
       total: Number(l.total),
       marginAmount: Number(l.marginAmount),
       marginPercent: Number(l.marginPercent),
+      appliedCeilingPercent: Number(l.appliedCeilingPercent || 0),
+      riskDeltaPercent: Number(l.riskDeltaPercent || 0),
+      isOverCeiling: Boolean(l.isOverCeiling),
       billingFrequency: l.billingFrequency,
     }));
 
@@ -232,12 +387,39 @@ async function loadQuotation(id: string) {
       recurringMonthlyTotal: Number(q.recurringMonthlyTotal || 0),
       recurringAnnualTotal: Number(q.recurringAnnualTotal || 0),
     });
+
+    if (q.riskDetails) {
+      Object.assign(risk, q.riskDetails);
+    } else {
+      risk.riskScore = Number(q.riskScore || 0);
+      risk.riskLevel = q.riskLevel || 'low';
+      risk.approvalRouting = q.approvalRouting || 'none';
+    }
+
+    // Load Audit Trail
+    await loadAuditTrail(id);
   } catch (err: any) {
     errorMessage.value = err.message || 'Failed to load quotation';
   }
 }
 
+let recalculateTimer: any = null;
+
+function debouncedRecalculate() {
+  if (recalculateTimer) clearTimeout(recalculateTimer);
+  recalculateTimer = setTimeout(() => {
+    recalculate();
+  }, 150);
+}
+
+// Monotonic guard: only the newest /calculate response may write totals/risk,
+// so an older in-flight response can never overwrite fresher numbers.
+let recalcSequence = 0;
+const recalcError = ref<string | null>(null);
+
 async function recalculate() {
+  recalcError.value = null;
+
   if (!selectedCustomerId.value || lines.value.length === 0) {
     Object.assign(totals, {
       orderDiscountPercent: orderDiscountPercent.value,
@@ -252,16 +434,48 @@ async function recalculate() {
       recurringMonthlyTotal: 0,
       recurringAnnualTotal: 0,
     });
+    Object.assign(risk, {
+      riskScore: 0,
+      riskLevel: 'low',
+      approvalRouting: 'none',
+      routingReason: 'All lines comply with rulebook ceilings.',
+      hasLineOverCeiling: false,
+      overCeilingLineCount: 0,
+      totalLines: 0,
+      lines: [],
+    });
+    suggestions.value = [];
     return;
   }
 
   const tierId = selectedCustomer.value?.tierId;
-  if (!tierId) return;
+  if (!tierId) {
+    // Selected customer has no resolvable tier — reset instead of silently
+    // keeping stale numbers while inputs visibly change.
+    Object.assign(totals, {
+      orderDiscountPercent: orderDiscountPercent.value,
+      orderDiscountAmount: 0,
+      subtotal: 0,
+      totalDiscount: 0,
+      totalAmount: 0,
+      totalCost: 0,
+      totalMargin: 0,
+      totalMarginPercent: 0,
+      oneTimeTotal: 0,
+      recurringMonthlyTotal: 0,
+      recurringAnnualTotal: 0,
+    });
+    recalcError.value = 'The selected customer has no pricing tier — summary and margin are unavailable until a tier is assigned.';
+    return;
+  }
+
+  const seq = ++recalcSequence;
 
   try {
     const payload = {
       tierId,
       orderDiscountPercent: Number(orderDiscountPercent.value || 0),
+      quotationId: quoteId.value || undefined,
       lines: lines.value.map((l) => ({
         productId: l.productId,
         quantity: Number(l.quantity || 1),
@@ -270,13 +484,16 @@ async function recalculate() {
       })),
     };
 
-    const res = await apiRequest<{ computedLines: any[]; totals: QuotationTotals }>(
+    const res = await apiRequest<{ computedLines: any[]; totals: QuotationTotals; risk: RiskState }>(
       '/api/quotations/calculate',
       {
         method: 'POST',
         body: JSON.stringify(payload),
       }
     );
+
+    // A newer recalculation started while this request was in flight — discard.
+    if (seq !== recalcSequence) return;
 
     res.computedLines.forEach((cl, idx) => {
       if (lines.value[idx]) {
@@ -286,12 +503,82 @@ async function recalculate() {
         lines.value[idx].marginAmount = cl.marginAmount;
         lines.value[idx].marginPercent = cl.marginPercent;
         lines.value[idx].billingFrequency = cl.billingFrequency;
+        lines.value[idx].appliedCeilingPercent = cl.appliedCeilingPercent;
+        lines.value[idx].riskDeltaPercent = cl.riskDeltaPercent;
+        lines.value[idx].isOverCeiling = cl.isOverCeiling;
       }
     });
 
     Object.assign(totals, res.totals);
+    if (res.risk) {
+      Object.assign(risk, res.risk);
+    }
+
+    // Refresh suggestions without widening the totals race window.
+    fetchUpsellSuggestions();
   } catch (err: any) {
-    console.error('Recalculation error:', err);
+    if (seq !== recalcSequence) return;
+    recalcError.value = err.message || 'Live pricing failed — summary may be stale. Adjust an input to retry.';
+  }
+}
+
+async function fetchUpsellSuggestions() {
+  if (!selectedCustomerId.value) {
+    suggestions.value = [];
+    return;
+  }
+
+  isSuggestionsLoading.value = true;
+  try {
+    const res = await apiRequest<{ suggestions: UpsellSuggestionItem[] }>('/api/recommendations/upsell', {
+      method: 'POST',
+      body: JSON.stringify({
+        productIds: lines.value.map((l) => l.productId),
+        tierId: selectedCustomer.value?.tierId,
+        subtotal: totals.subtotal,
+        totalAmount: totals.totalAmount,
+        totalCost: totals.totalCost,
+        totalMargin: totals.totalMargin,
+      }),
+    });
+    suggestions.value = res.suggestions || [];
+  } catch (err) {
+    console.warn('Failed to load upsell suggestions:', err);
+  } finally {
+    isSuggestionsLoading.value = false;
+  }
+}
+
+function handleAddSuggestion(suggestion: UpsellSuggestionItem) {
+  const matchedProduct = availableProducts.value.find((p) => p.id === suggestion.productId);
+  if (matchedProduct) {
+    addProductToQuote(matchedProduct);
+  } else {
+    // Construct line from suggestion if not in initial memory
+    lines.value.push({
+      productId: suggestion.productId,
+      product: {
+        id: suggestion.productId,
+        name: suggestion.name,
+        sku: suggestion.sku,
+        categoryId: suggestion.categoryId,
+        price: suggestion.unitPrice,
+        costPrice: suggestion.costPrice,
+        billingFrequency: suggestion.billingFrequency as any,
+        category: suggestion.categoryName
+          ? { id: suggestion.categoryId || '', name: suggestion.categoryName, code: suggestion.categoryCode || '' }
+          : undefined,
+      },
+      quantity: 1,
+      unitPrice: suggestion.unitPrice,
+      lineDiscountPercent: suggestion.lineDiscountPercent,
+      subtotal: suggestion.lineTotal,
+      total: suggestion.lineTotal,
+      marginAmount: suggestion.marginAmount,
+      marginPercent: suggestion.marginPercent,
+      billingFrequency: suggestion.billingFrequency,
+    });
+    debouncedRecalculate();
   }
 }
 
@@ -325,12 +612,12 @@ function addProductToQuote(product: Product) {
   }
 
   isProductDialogOpen.value = false;
-  recalculate();
+  debouncedRecalculate();
 }
 
 function removeLine(index: number) {
   lines.value.splice(index, 1);
-  recalculate();
+  debouncedRecalculate();
 }
 
 async function handleSaveQuotation() {
@@ -401,7 +688,7 @@ async function handleCreateCustomer() {
     newCustomerForm.email = '';
     newCustomerForm.company = '';
     newCustomerForm.phone = '';
-    recalculate();
+    debouncedRecalculate();
   } catch (err: any) {
     errorMessage.value = err.message || 'Failed to create customer';
   } finally {
@@ -427,12 +714,203 @@ function getCategoryBadgeClass(code?: string): string {
   }
 }
 
+function getMarginBadgeClass(marginPct: number): string {
+  if (marginPct >= 30) {
+    return 'bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 border-emerald-300';
+  } else if (marginPct >= 15) {
+    return 'bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 border-amber-300';
+  } else {
+    return 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 border-red-300';
+  }
+}
+
 watch(selectedCustomerId, () => {
-  recalculate();
+  debouncedRecalculate();
 });
+
+// ==================== PHASE 14 — CUSTOMER NEGOTIATION (Stage 6) ====================
+
+const negotiationData = ref<any>(null);
+const isNegotiationLoading = ref(false);
+const negotiationComment = ref('');
+const negotiationBusyId = ref<string | null>(null);
+const negotiationError = ref<string | null>(null);
+const negotiationNotice = ref<string | null>(null);
+const canManageNegotiation = computed(() =>
+  ['manager', 'org_admin'].includes(authStore.state.user?.role || '')
+);
+const negotiationComments = computed(() => negotiationData.value?.comments ?? []);
+const openCounters = computed(
+  () => negotiationData.value?.counterProposals?.filter((c: any) => c.status === 'open') ?? []
+);
+const decidedCounters = computed(
+  () => negotiationData.value?.counterProposals?.filter((c: any) => c.status !== 'open') ?? []
+);
+const openChangeRequests = computed(
+  () => negotiationData.value?.changeRequests?.filter((c: any) => c.status === 'open') ?? []
+);
+const decidedChangeRequests = computed(
+  () => negotiationData.value?.changeRequests?.filter((c: any) => c.status !== 'open') ?? []
+);
+
+function negotiationLineLabel(line: { productId?: string } | null | undefined): string {
+  if (!line?.productId) return 'General';
+  const l = lines.value.find((x) => x.productId === line.productId);
+  return l?.product?.name ? String(l.product.name) : 'Line item';
+}
+
+async function loadNegotiation() {
+  if (!quoteId.value) return;
+  isNegotiationLoading.value = true;
+  try {
+    negotiationData.value = await apiRequest<any>(`/api/negotiation/${quoteId.value}`);
+  } catch (err: any) {
+    // Non-fatal: the panel simply shows empty state
+    negotiationData.value = null;
+  } finally {
+    isNegotiationLoading.value = false;
+  }
+}
+
+async function postInternalComment() {
+  if (!quoteId.value || !negotiationComment.value.trim()) return;
+  negotiationBusyId.value = 'internal-comment';
+  negotiationError.value = null;
+  try {
+    await apiRequest(`/api/negotiation/${quoteId.value}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body: negotiationComment.value.trim() }),
+    });
+    negotiationComment.value = '';
+    await loadNegotiation();
+  } catch (err: any) {
+    negotiationError.value = err.message || 'Failed to post reply';
+  } finally {
+    negotiationBusyId.value = null;
+  }
+}
+
+async function resolveCounter(counterId: string, action: 'accept' | 'decline') {
+  if (!quoteId.value) return;
+  negotiationBusyId.value = counterId;
+  negotiationError.value = null;
+  negotiationNotice.value = null;
+  try {
+    const res = await apiRequest<any>(
+      `/api/negotiation/${quoteId.value}/counters/${counterId}/resolve`,
+      { method: 'POST', body: JSON.stringify({ action }) }
+    );
+    if (action === 'accept') {
+      negotiationNotice.value =
+        res && typeof res === 'object' && 'reenteredApproval' in res
+          ? 'Counter accepted. New terms exceed the approval thresholds — the quotation was routed back to the approval queue.'
+          : 'Counter accepted and quotation terms updated.';
+    } else {
+      negotiationNotice.value = 'Counter declined.';
+    }
+    await loadNegotiation();
+    await loadQuotation(quoteId.value);
+  } catch (err: any) {
+    negotiationError.value = err.message || 'Failed to resolve counter-proposal';
+  } finally {
+    negotiationBusyId.value = null;
+  }
+}
+
+async function resolveChangeRequest(requestId: string, action: 'accept' | 'decline') {
+  if (!quoteId.value) return;
+  negotiationBusyId.value = requestId;
+  negotiationError.value = null;
+  negotiationNotice.value = null;
+  try {
+    const res = await apiRequest<any>(
+      `/api/negotiation/${quoteId.value}/change-requests/${requestId}/resolve`,
+      { method: 'POST', body: JSON.stringify({ action }) }
+    );
+    if (action === 'accept') {
+      negotiationNotice.value =
+        res && typeof res === 'object' && 'reenteredApproval' in res
+          ? 'Change request accepted — terms re-validated against the rulebook and the quotation re-entered the approval queue.'
+          : 'Change request accepted and quotation terms updated.';
+    } else {
+      negotiationNotice.value = 'Change request declined.';
+    }
+    await loadNegotiation();
+    await loadQuotation(quoteId.value);
+  } catch (err: any) {
+    negotiationError.value = err.message || 'Failed to resolve change request';
+  } finally {
+    negotiationBusyId.value = null;
+  }
+}
+
+function negotiationRequestBadge(status: string): { label: string; class: string } {
+  switch (status) {
+    case 'open':
+      return { label: 'Open', class: 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border-amber-300' };
+    case 'accepted':
+      return { label: 'Accepted', class: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border-emerald-300' };
+    case 'applied':
+      return { label: 'Applied', class: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border-emerald-300' };
+    case 'declined':
+      return { label: 'Declined', class: 'bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300 border-red-300' };
+    case 'superseded':
+      return { label: 'Superseded', class: 'bg-muted text-muted-foreground border-border' };
+    default:
+      return { label: status, class: 'bg-muted text-muted-foreground border-border' };
+  }
+}
 
 onMounted(() => {
   loadInitialData();
+
+  if (isEditMode.value) {
+    loadNegotiation();
+  }
+
+  // Socket.IO realtime connection & listener
+  try {
+    const socket = getSocket();
+    if (quoteId.value) {
+      socket.emit('quote:join', quoteId.value);
+    }
+
+    socket.on('pricing:updated', (data: any) => {
+      if (data && data.quotationId === quoteId.value && data.totals) {
+        Object.assign(totals, data.totals);
+      }
+    });
+
+    socket.on('quote:updated', (data: any) => {
+      if (data && data.quotation && data.quotation.id === quoteId.value) {
+        quotationStatus.value = data.quotation.status;
+      }
+    });
+
+    // Phase 14: live negotiation activity from the customer portal
+    socket.on('negotiation:updated', (data: any) => {
+      if (data && data.quotationId === quoteId.value) {
+        loadNegotiation();
+      }
+    });
+  } catch (err) {
+    console.warn('Socket connection setup error:', err);
+  }
+});
+
+onUnmounted(() => {
+  if (recalculateTimer) clearTimeout(recalculateTimer);
+  try {
+    const socket = getSocket();
+    if (quoteId.value) {
+      socket.emit('quote:leave', quoteId.value);
+    }
+    socket.off('pricing:updated');
+    socket.off('quote:updated');
+    socket.off('negotiation:updated');
+  } catch {
+    // Non-fatal
+  }
 });
 </script>
 
@@ -466,7 +944,7 @@ onMounted(() => {
           </h1>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
             size="sm"
@@ -476,6 +954,56 @@ onMounted(() => {
             <RotateCcw class="w-4 h-4 mr-1.5" />
             Recalculate
           </Button>
+
+          <!-- Submit for Approval button (visible if draft or rejected and quote is saved) -->
+          <Button
+            v-if="isEditMode && ['draft', 'rejected'].includes(quotationStatus)"
+            variant="outline"
+            size="sm"
+            class="h-9 border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 hover:bg-amber-100"
+            @click="isSubmitDialogOpen = true"
+          >
+            <Send class="w-4 h-4 mr-1.5" />
+            Submit for Approval
+          </Button>
+
+          <!-- Approver Action buttons (visible if pending_approval and user has manager/finance/admin role) -->
+          <template v-if="isEditMode && quotationStatus === 'pending_approval' && ['manager', 'finance', 'org_admin'].includes(authStore.state.user?.role || '')">
+            <Button
+              variant="destructive"
+              size="sm"
+              class="h-9 text-xs font-semibold"
+              @click="approverActionType = 'reject'; isApproverActionDialogOpen = true;"
+            >
+              <XCircle class="w-4 h-4 mr-1.5" />
+              Reject
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              class="h-9 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white"
+              @click="approverActionType = 'approve'; isApproverActionDialogOpen = true;"
+            >
+              <CheckCircle2 class="w-4 h-4 mr-1.5" />
+              Approve
+            </Button>
+          </template>
+
+          <!-- Send to Customer Button (Rep / Manager) -->
+          <Button
+            v-if="isEditMode && ['approved', 'sent', 'draft'].includes(quotationStatus)"
+            variant="outline"
+            size="sm"
+            class="h-9 border-blue-300 bg-blue-50 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 hover:bg-blue-100"
+            :disabled="isSendingToCustomer"
+            @click="handleSendToCustomer"
+            title="Dispatch customer portal magic link email via Mailhog"
+          >
+            <Send v-if="!isSendingToCustomer" class="w-4 h-4 mr-1.5 text-blue-600" />
+            <RotateCcw v-else class="w-4 h-4 mr-1.5 animate-spin text-blue-600" />
+            {{ isSendingToCustomer ? 'Sending...' : 'Send to Customer' }}
+          </Button>
+
           <Button
             size="sm"
             @click="handleSaveQuotation"
@@ -510,6 +1038,22 @@ onMounted(() => {
         
         <!-- LEFT COLUMN: Product Lines & Category Builder (8 cols) -->
         <div class="lg:col-span-8 space-y-6">
+          <!-- Create mode: quotations start from a customer request -->
+          <div
+            v-if="!isEditMode && !selectedCustomerId"
+            class="p-4 rounded-xl border border-primary/30 bg-primary/5 flex items-start gap-3"
+          >
+            <User class="w-5 h-5 text-primary shrink-0 mt-0.5" />
+            <div class="space-y-1 text-xs">
+              <p class="font-semibold text-foreground">Select a customer request to start building</p>
+              <p class="text-muted-foreground">
+                Quotations are always created for a customer. Choose the customer in the
+                "Customer Request" panel on the right — their requirement details will
+                guide the quotation you build here.
+              </p>
+            </div>
+          </div>
+
           <Card class="border-border bg-card shadow-xs">
             <CardHeader class="pb-3 border-b border-border/70">
               <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -526,6 +1070,8 @@ onMounted(() => {
                   size="sm"
                   variant="outline"
                   class="h-8 font-semibold text-xs border-primary/30 text-primary hover:bg-primary/10"
+                  :disabled="!selectedCustomerId"
+                  :title="!selectedCustomerId ? 'Select a customer request first' : ''"
                   @click="isProductDialogOpen = true"
                 >
                   <Plus class="w-3.5 h-3.5 mr-1" />
@@ -539,11 +1085,16 @@ onMounted(() => {
                 <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto text-primary">
                   <Layers class="w-6 h-6" />
                 </div>
-                <h4 class="text-sm font-semibold text-foreground">No line items in this quotation</h4>
+                <h4 class="text-sm font-semibold text-foreground">
+                  {{ selectedCustomerId ? 'No line items in this quotation' : 'Waiting for a customer selection' }}
+                </h4>
                 <p class="text-xs text-muted-foreground max-w-sm mx-auto">
-                  Click "Add Product / Service" to build a mixed quotation with hardware, consulting services, or recurring licenses.
+                  {{ selectedCustomerId
+                    ? 'Click "Add Product / Service" to build a mixed quotation with hardware, consulting services, or recurring licenses.'
+                    : 'Pick the customer on the right (or open Quotations → New Quotation) to begin building their quotation.' }}
                 </p>
                 <Button
+                  v-if="selectedCustomerId"
                   size="sm"
                   @click="isProductDialogOpen = true"
                   class="mt-2 text-xs"
@@ -569,7 +1120,10 @@ onMounted(() => {
                     <TableRow
                       v-for="(line, idx) in lines"
                       :key="idx"
-                      class="text-xs hover:bg-muted/20 transition-colors"
+                      :class="[
+                        'text-xs transition-colors',
+                        line.isOverCeiling ? 'bg-destructive/5 hover:bg-destructive/10' : 'hover:bg-muted/20'
+                      ]"
                     >
                       <!-- Product Info -->
                       <TableCell class="py-3">
@@ -593,6 +1147,18 @@ onMounted(() => {
                             ({{ line.billingFrequency }})
                           </span>
                         </div>
+                        <!-- Line-Level Risk & Ceiling Indicator -->
+                        <div v-if="line.appliedCeilingPercent !== undefined" class="flex items-center gap-1.5 mt-1.5 text-3xs">
+                          <span class="text-muted-foreground">Ceiling: <strong>{{ line.appliedCeilingPercent }}%</strong></span>
+                          <Badge
+                            v-if="line.isOverCeiling"
+                            variant="outline"
+                            class="text-3xs py-0 px-1 bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border-red-300"
+                          >
+                            +{{ Number(line.riskDeltaPercent).toFixed(1) }}% Over Ceiling
+                          </Badge>
+                          <span v-else class="text-emerald-600 dark:text-emerald-400 font-medium">✓ In Policy</span>
+                        </div>
                       </TableCell>
 
                       <!-- Quantity Input -->
@@ -601,7 +1167,8 @@ onMounted(() => {
                           type="number"
                           min="1"
                           v-model.number="line.quantity"
-                          @change="recalculate"
+                          @input="debouncedRecalculate"
+                          @change="debouncedRecalculate"
                           class="h-8 w-16 text-center mx-auto text-xs"
                         />
                       </TableCell>
@@ -615,7 +1182,8 @@ onMounted(() => {
                             step="0.01"
                             min="0"
                             v-model.number="line.unitPrice"
-                            @change="recalculate"
+                            @input="debouncedRecalculate"
+                            @change="debouncedRecalculate"
                             class="h-8 w-24 text-right text-xs"
                           />
                         </div>
@@ -633,7 +1201,8 @@ onMounted(() => {
                             min="0"
                             max="100"
                             v-model.number="line.lineDiscountPercent"
-                            @change="recalculate"
+                            @input="debouncedRecalculate"
+                            @change="debouncedRecalculate"
                             class="h-8 w-16 text-center text-xs"
                           />
                           <span class="text-2xs text-muted-foreground ml-1">%</span>
@@ -648,7 +1217,10 @@ onMounted(() => {
                         <div class="font-bold text-foreground text-xs">
                           {{ formatCurrency(line.total) }}
                         </div>
-                        <div class="text-2xs font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        <div
+                          class="text-2xs font-semibold mt-0.5"
+                          :class="line.marginPercent >= 25 ? 'text-emerald-600 dark:text-emerald-400' : line.marginPercent >= 10 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'"
+                        >
                           Margin: {{ Number(line.marginPercent).toFixed(1) }}%
                         </div>
                       </TableCell>
@@ -678,6 +1250,7 @@ onMounted(() => {
                 variant="ghost"
                 size="sm"
                 class="text-xs h-7 text-primary"
+                :disabled="!selectedCustomerId"
                 @click="isProductDialogOpen = true"
               >
                 <Plus class="w-3.5 h-3.5 mr-1" />
@@ -686,32 +1259,263 @@ onMounted(() => {
             </CardFooter>
           </Card>
 
-          <!-- Deal Notes & Terms -->
+          <!-- Upsell & Cross-Sell Recommendations Panel -->
+          <UpsellPanel
+            :suggestions="suggestions"
+            :is-loading="isSuggestionsLoading"
+            @add-suggestion="handleAddSuggestion"
+          />
+
+          <!-- Customer Requirement & Terms -->
           <Card class="border-border bg-card shadow-xs">
             <CardHeader class="pb-2">
-              <CardTitle class="text-sm font-semibold text-foreground">Deal Notes & Special Terms</CardTitle>
-              <CardDescription class="text-xs">Optional terms communicated to customer and approval reviewers.</CardDescription>
+              <CardTitle class="text-sm font-semibold text-foreground">Customer Requirement & Notes</CardTitle>
+              <CardDescription class="text-xs">
+                Capture the customer's request, agreed terms, and any conditions — visible to the customer on their portal.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <textarea
                 v-model="notes"
-                placeholder="Add quotation remarks, payment terms, or fulfillment instructions..."
+                placeholder="What did the customer ask for? Add agreed terms, payment conditions, or fulfillment instructions..."
                 rows="3"
                 class="w-full rounded-md border border-input bg-background p-2.5 text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring"
               ></textarea>
             </CardContent>
           </Card>
+
+          <!-- Stage 3 Audit Trail Timeline (Immutable Lifecycle History) -->
+          <Card v-if="isEditMode" class="border-border bg-card shadow-xs">
+            <CardHeader class="pb-2 border-b border-border/70">
+              <div class="flex items-center justify-between">
+                <div>
+                  <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <History class="w-4 h-4 text-primary" />
+                    Governance Audit Trail & Lifecycle
+                  </CardTitle>
+                  <CardDescription class="text-xs">
+                    Immutable history of submissions, discount threshold approvals, and escalations.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-7 text-xs text-muted-foreground"
+                  @click="loadAuditTrail(quoteId!)"
+                >
+                  <RotateCcw class="w-3.5 h-3.5 mr-1" :class="{ 'animate-spin': isAuditLoading }" />
+                  Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent class="pt-4">
+              <AuditTrailTimeline :audit-logs="auditLogs" />
+            </CardContent>
+          </Card>
+
+          <!-- Stage 6: Customer Negotiation Panel (Phase 14) -->
+          <Card v-if="isEditMode" class="border-border bg-card shadow-xs">
+            <CardHeader class="pb-2 border-b border-border/70">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <MessagesSquare class="w-4 h-4 text-primary" />
+                    Customer Negotiation
+                    <Badge
+                      v-if="openCounters.length + openChangeRequests.length > 0"
+                      class="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border-amber-300 text-[10px]"
+                    >
+                      {{ openCounters.length + openChangeRequests.length }} awaiting your review
+                    </Badge>
+                  </CardTitle>
+                  <CardDescription class="text-xs">
+                    Live thread from the customer portal — counters, change requests and comments.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-7 text-xs text-muted-foreground"
+                  @click="loadNegotiation"
+                >
+                  <RotateCcw class="w-3.5 h-3.5 mr-1" :class="{ 'animate-spin': isNegotiationLoading }" />
+                  Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent class="pt-4 space-y-4">
+              <!-- Feedback -->
+              <div v-if="negotiationError" class="p-2 rounded-md bg-destructive/10 text-destructive text-xs">{{ negotiationError }}</div>
+              <div v-if="negotiationNotice" class="p-2 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs">{{ negotiationNotice }}</div>
+
+              <!-- Comments thread -->
+              <div class="space-y-2 max-h-60 overflow-y-auto pr-1">
+                <div v-if="negotiationComments.length === 0" class="text-xs text-muted-foreground text-center py-4 border border-dashed border-border rounded-md">
+                  No customer messages yet.
+                </div>
+                <div
+                  v-for="c in negotiationComments"
+                  :key="c.id"
+                  class="flex gap-2"
+                  :class="c.authorType === 'internal' ? 'flex-row-reverse' : ''"
+                >
+                  <div
+                    class="size-6 rounded-md grid place-items-center text-[9px] font-bold shrink-0"
+                    :class="c.authorType === 'customer' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
+                  >
+                    {{ (c.authorName || '?').substring(0, 2).toUpperCase() }}
+                  </div>
+                  <div class="max-w-[85%]">
+                    <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <span class="font-semibold text-foreground">{{ c.authorName }}</span>
+                      <span>{{ c.authorType === 'customer' ? 'Customer' : 'Team' }}</span>
+                      <span v-if="c.lineId" class="px-1.5 py-0.5 rounded bg-muted border border-border">{{ negotiationLineLabel(c.line) }}</span>
+                    </div>
+                    <div
+                      class="px-2.5 py-1.5 rounded-lg text-xs mt-0.5"
+                      :class="c.authorType === 'customer' ? 'bg-muted text-foreground' : 'bg-primary/10 text-foreground'"
+                    >
+                      {{ c.body }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Internal reply -->
+              <div class="flex gap-2">
+                <Input
+                  v-model="negotiationComment"
+                  placeholder="Reply to the customer..."
+                  class="h-8 text-xs"
+                  @keydown.enter="postInternalComment"
+                />
+                <Button
+                  size="sm"
+                  class="h-8 text-xs"
+                  :disabled="!negotiationComment.trim() || negotiationBusyId === 'internal-comment'"
+                  @click="postInternalComment"
+                >
+                  Reply
+                </Button>
+              </div>
+
+              <!-- Open counter-proposals -->
+              <div v-if="openCounters.length > 0" class="space-y-2 pt-2 border-t border-border/70">
+                <div class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Counter-Discount Proposals</div>
+                <div
+                  v-for="cp in openCounters"
+                  :key="cp.id"
+                  class="p-3 rounded-lg border border-amber-300/60 bg-amber-50 dark:bg-amber-950/40 space-y-2"
+                >
+                  <div class="flex items-center justify-between gap-2 text-xs">
+                    <div class="font-semibold text-foreground">
+                      Customer proposes <span class="text-primary font-bold">{{ Number(cp.proposedDiscountPercent) }}%</span>
+                      {{ cp.lineId ? `on ${negotiationLineLabel(cp.line)}` : 'on the whole order' }}
+                    </div>
+                    <span class="text-[10px] text-muted-foreground">{{ new Date(cp.createdAt).toLocaleString() }}</span>
+                  </div>
+                  <p v-if="cp.note" class="text-xs text-muted-foreground italic">"{{ cp.note }}"</p>
+                  <div v-if="canManageNegotiation" class="flex gap-2">
+                    <Button
+                      size="sm"
+                      class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                      :disabled="negotiationBusyId === cp.id"
+                      @click="resolveCounter(cp.id, 'accept')"
+                    >
+                      <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
+                      Accept (updates terms)
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="h-7 text-xs"
+                      :disabled="negotiationBusyId === cp.id"
+                      @click="resolveCounter(cp.id, 'decline')"
+                    >
+                      <XCircle class="w-3.5 h-3.5 mr-1" />
+                      Decline
+                    </Button>
+                  </div>
+                  <p v-else class="text-[10px] text-muted-foreground">Waiting for a manager or org admin to decide.</p>
+                </div>
+              </div>
+
+              <!-- Open change requests -->
+              <div v-if="openChangeRequests.length > 0" class="space-y-2 pt-2 border-t border-border/70">
+                <div class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Change Requests</div>
+                <div
+                  v-for="cr in openChangeRequests"
+                  :key="cr.id"
+                  class="p-3 rounded-lg border border-sky-300/60 bg-sky-50 dark:bg-sky-950/40 space-y-2"
+                >
+                  <div class="flex items-center justify-between gap-2 text-xs">
+                    <div class="font-semibold text-foreground capitalize">
+                      {{ cr.requestType.replace('_', ' ') }}
+                      <template v-if="cr.lineId"> — {{ negotiationLineLabel(cr.line) }}</template>
+                      <template v-if="cr.proposedQuantity"> → qty {{ cr.proposedQuantity }}</template>
+                      <template v-if="cr.proposedDiscountPercent"> → {{ Number(cr.proposedDiscountPercent) }}%</template>
+                    </div>
+                    <span class="text-[10px] text-muted-foreground">{{ new Date(cr.createdAt).toLocaleString() }}</span>
+                  </div>
+                  <p v-if="cr.note" class="text-xs text-muted-foreground italic">"{{ cr.note }}"</p>
+                  <div v-if="canManageNegotiation" class="flex gap-2">
+                    <Button
+                      size="sm"
+                      class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                      :disabled="negotiationBusyId === cr.id"
+                      @click="resolveChangeRequest(cr.id, 'accept')"
+                    >
+                      <CheckCircle2 class="w-3.5 h-3.5 mr-1" />
+                      Accept (updates terms)
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="h-7 text-xs"
+                      :disabled="negotiationBusyId === cr.id"
+                      @click="resolveChangeRequest(cr.id, 'decline')"
+                    >
+                      <XCircle class="w-3.5 h-3.5 mr-1" />
+                      Decline
+                    </Button>
+                  </div>
+                  <p v-else class="text-[10px] text-muted-foreground">Waiting for a manager or org admin to decide.</p>
+                </div>
+              </div>
+
+              <!-- Resolved history -->
+              <div v-if="decidedCounters.length + decidedChangeRequests.length > 0" class="pt-2 border-t border-border/70 space-y-1.5">
+                <div class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Resolved Negotiation History</div>
+                <div v-for="cp in decidedCounters" :key="'cp-' + cp.id" class="flex items-center justify-between gap-2 text-xs">
+                  <span class="text-muted-foreground">
+                    Counter {{ Number(cp.proposedDiscountPercent) }}% {{ cp.lineId ? `on ${negotiationLineLabel(cp.line)}` : '(order)' }}
+                  </span>
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="negotiationRequestBadge(cp.status).class">
+                    {{ negotiationRequestBadge(cp.status).label }}
+                  </span>
+                </div>
+                <div v-for="cr in decidedChangeRequests" :key="'cr-' + cr.id" class="flex items-center justify-between gap-2 text-xs">
+                  <span class="text-muted-foreground capitalize">
+                    {{ cr.requestType.replace('_', ' ') }}{{ cr.lineId ? ` — ${negotiationLineLabel(cr.line)}` : '' }}
+                  </span>
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border" :class="negotiationRequestBadge(cr.status).class">
+                    {{ negotiationRequestBadge(cr.status).label }}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
-        <!-- RIGHT COLUMN: Customer, Tier & Pricing Breakdown Card (4 cols) -->
+        <!-- RIGHT COLUMN: Customer Request, Tier & Pricing Breakdown Card (4 cols) -->
         <div class="lg:col-span-4 space-y-6">
-          <!-- Customer Selection Card -->
+          <!-- Customer Request Card -->
           <Card class="border-border bg-card shadow-xs">
             <CardHeader class="pb-3 border-b border-border/70">
               <div class="flex items-center justify-between">
                 <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
                   <User class="w-4 h-4 text-primary" />
-                  Target Customer
+                  Customer Request
                 </CardTitle>
                 <Button
                   variant="ghost"
@@ -727,7 +1531,9 @@ onMounted(() => {
 
             <CardContent class="space-y-4 pt-4">
               <div class="space-y-1.5">
-                <Label class="text-xs font-semibold">Select Customer</Label>
+                <Label class="text-xs font-semibold">
+                  {{ isEditMode ? 'Customer' : 'Whose request are you quoting?' }}
+                </Label>
                 <select
                   v-model="selectedCustomerId"
                   class="w-full h-9 px-3 rounded-md border border-input bg-background text-xs text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring"
@@ -743,7 +1549,7 @@ onMounted(() => {
                 </select>
               </div>
 
-              <!-- Selected Customer Details & Tier -->
+              <!-- Selected Customer Requirement Details & Tier -->
               <div
                 v-if="selectedCustomer"
                 class="p-3 rounded-lg bg-muted/40 border border-border/70 space-y-2 text-xs"
@@ -761,12 +1567,42 @@ onMounted(() => {
                   </span>
                 </div>
                 <div class="flex items-center justify-between">
-                  <span class="text-muted-foreground">Customer Email:</span>
+                  <span class="text-muted-foreground">Email:</span>
                   <span class="text-foreground truncate max-w-[150px]">{{ selectedCustomer.email }}</span>
                 </div>
+                <div v-if="selectedCustomer.company" class="flex items-center justify-between">
+                  <span class="text-muted-foreground">Company:</span>
+                  <span class="text-foreground truncate max-w-[150px]">{{ selectedCustomer.company }}</span>
+                </div>
+                <div v-if="selectedCustomer.phone" class="flex items-center justify-between">
+                  <span class="text-muted-foreground">Phone:</span>
+                  <span class="text-foreground">{{ selectedCustomer.phone }}</span>
+                </div>
+                <div v-if="selectedCustomer.address" class="flex items-start justify-between gap-3">
+                  <span class="text-muted-foreground shrink-0">Address:</span>
+                  <span class="text-foreground text-right">{{ selectedCustomer.address }}</span>
+                </div>
+              </div>
+              <div
+                v-else-if="!isEditMode"
+                class="p-3 rounded-lg border border-dashed border-border text-xs text-muted-foreground text-center"
+              >
+                No customer selected yet — quotations are always built for a customer request.
               </div>
             </CardContent>
           </Card>
+
+          <!-- Governance Core (Stage 3): Live Discount Risk Score Card -->
+          <RiskScoreBadge
+            :risk-score="risk.riskScore"
+            :risk-level="risk.riskLevel"
+            :approval-routing="risk.approvalRouting"
+            :routing-reason="risk.routingReason"
+            :has-line-over-ceiling="risk.hasLineOverCeiling"
+            :over-ceiling-line-count="risk.overCeilingLineCount"
+            :total-lines="risk.totalLines"
+            :lines="risk.lines"
+          />
 
           <!-- Pricing & Financial Margin Summary Card -->
           <Card class="border-border bg-card shadow-xs">
@@ -778,6 +1614,12 @@ onMounted(() => {
             </CardHeader>
 
             <CardContent class="space-y-4 pt-4 text-xs">
+              <!-- Live pricing failure / tier warning -->
+              <div v-if="recalcError" class="p-2.5 rounded-md bg-amber-100 dark:bg-amber-950/60 border border-amber-300 text-amber-800 dark:text-amber-200 text-2xs flex items-start gap-1.5">
+                <AlertTriangle class="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{{ recalcError }}</span>
+              </div>
+
               <!-- Subtotal before order discount -->
               <div class="flex items-center justify-between">
                 <span class="text-muted-foreground">Gross Subtotal:</span>
@@ -805,7 +1647,8 @@ onMounted(() => {
                       max="100"
                       step="0.5"
                       v-model.number="orderDiscountPercent"
-                      @change="recalculate"
+                      @input="debouncedRecalculate"
+                      @change="debouncedRecalculate"
                       class="h-7 w-16 text-right text-xs"
                     />
                     <span class="text-2xs text-muted-foreground">%</span>
@@ -845,17 +1688,29 @@ onMounted(() => {
               </div>
 
               <!-- Margin Indicator -->
-              <div class="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 space-y-2">
+              <div
+                class="p-3 rounded-lg border space-y-2 transition-colors"
+                :class="totals.totalMarginPercent >= 30 ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800' : totals.totalMarginPercent >= 15 ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800' : 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800'"
+              >
                 <div class="flex items-center justify-between">
-                  <span class="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+                  <span
+                    class="font-semibold flex items-center gap-1"
+                    :class="totals.totalMarginPercent >= 30 ? 'text-emerald-800 dark:text-emerald-300' : totals.totalMarginPercent >= 15 ? 'text-amber-800 dark:text-amber-300' : 'text-red-800 dark:text-red-300'"
+                  >
                     <Sparkles class="w-3.5 h-3.5" />
                     Total Deal Margin
                   </span>
-                  <Badge variant="outline" class="bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 border-emerald-300 font-bold text-xs">
+                  <Badge
+                    variant="outline"
+                    :class="['font-bold text-xs', getMarginBadgeClass(totals.totalMarginPercent)]"
+                  >
                     {{ Number(totals.totalMarginPercent).toFixed(1) }}%
                   </Badge>
                 </div>
-                <div class="flex justify-between text-2xs text-emerald-700 dark:text-emerald-300">
+                <div
+                  class="flex justify-between text-2xs"
+                  :class="totals.totalMarginPercent >= 30 ? 'text-emerald-700 dark:text-emerald-300' : totals.totalMarginPercent >= 15 ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300'"
+                >
                   <span>Gross Profit Margin:</span>
                   <span class="font-bold">{{ formatCurrency(totals.totalMargin) }}</span>
                 </div>
@@ -1029,6 +1884,155 @@ onMounted(() => {
               :disabled="isCreatingCustomer || !newCustomerForm.name || !newCustomerForm.email"
             >
               {{ isCreatingCustomer ? 'Creating...' : 'Create & Select' }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <!-- SUBMIT FOR APPROVAL MODAL -->
+      <Dialog :open="isSubmitDialogOpen" @update:open="isSubmitDialogOpen = $event">
+        <DialogContent class="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle class="text-base flex items-center gap-2">
+              <Send class="w-4 h-4 text-primary" />
+              Submit Quotation for Review
+            </DialogTitle>
+            <DialogDescription class="text-xs">
+              This quotation will be evaluated against rulebook ceilings and routed to approvers per policy.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div class="space-y-3 py-2 text-xs">
+            <div class="p-3 rounded-lg bg-muted border space-y-1">
+              <div class="flex justify-between font-semibold text-foreground">
+                <span>Quotation Number:</span>
+                <span>{{ quotationNumber }}</span>
+              </div>
+              <div class="flex justify-between text-muted-foreground">
+                <span>Risk Level:</span>
+                <span class="uppercase font-bold text-foreground">{{ risk.riskLevel }}</span>
+              </div>
+              <div class="flex justify-between text-muted-foreground">
+                <span>Routing Action:</span>
+                <span class="capitalize font-semibold text-foreground">{{ risk.approvalRouting.replace('_', ' → ') }}</span>
+              </div>
+            </div>
+
+            <div class="space-y-1">
+              <Label class="text-xs font-semibold">Submission Remarks (Optional)</Label>
+              <Textarea
+                v-model="submitNotes"
+                placeholder="Include deal background or strategic justifications for reviewers..."
+                rows="3"
+                class="text-xs"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" @click="isSubmitDialogOpen = false" :disabled="isSubmittingApproval">
+              Cancel
+            </Button>
+            <Button size="sm" @click="handleSubmitForApproval" :disabled="isSubmittingApproval">
+              <RotateCcw v-if="isSubmittingApproval" class="w-4 h-4 mr-1.5 animate-spin" />
+              Submit Quotation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <!-- DIRECT APPROVER ACTION MODAL (Manager / Finance) -->
+      <Dialog :open="isApproverActionDialogOpen" @update:open="isApproverActionDialogOpen = $event">
+        <DialogContent class="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle class="text-base flex items-center gap-2">
+              <component
+                :is="approverActionType === 'approve' ? CheckCircle2 : XCircle"
+                class="w-4 h-4"
+                :class="approverActionType === 'approve' ? 'text-emerald-600' : 'text-destructive'"
+              />
+              {{ approverActionType === 'approve' ? 'Approve Quotation Terms' : 'Reject Quotation' }}
+            </DialogTitle>
+            <DialogDescription class="text-xs">
+              Provide mandatory governance reason. An immutable audit record will be logged.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div class="space-y-3 py-2 text-xs">
+            <div class="space-y-1">
+              <Label class="text-xs font-semibold">
+                Mandatory Explanation <span class="text-destructive">*</span>
+              </Label>
+              <Textarea
+                v-model="approverReason"
+                rows="3"
+                placeholder="Mandatory rationale for this approval or rejection decision..."
+                class="text-xs"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" @click="isApproverActionDialogOpen = false" :disabled="isProcessingApproverAction">
+              Cancel
+            </Button>
+            <Button
+              :variant="approverActionType === 'approve' ? 'default' : 'destructive'"
+              size="sm"
+              :class="approverActionType === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : ''"
+              :disabled="isProcessingApproverAction || !approverReason.trim()"
+              @click="handleDirectApproverAction"
+            >
+              <RotateCcw v-if="isProcessingApproverAction" class="w-4 h-4 mr-1.5 animate-spin" />
+              Confirm {{ approverActionType === 'approve' ? 'Approval' : 'Rejection' }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <!-- CUSTOMER MAGIC LINK DISPATCHED MODAL -->
+      <Dialog :open="isSendCustomerDialogOpen" @update:open="isSendCustomerDialogOpen = $event">
+        <DialogContent class="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle class="text-base flex items-center gap-2 text-emerald-600">
+              <CheckCircle2 class="w-5 h-5 text-emerald-600" />
+              Customer Magic Link Dispatched!
+            </DialogTitle>
+            <DialogDescription class="text-xs">
+              The quotation review invitation has been sent via email to <strong>{{ dispatchedRecipientEmail }}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div class="space-y-4 py-2 text-xs">
+            <div class="rounded-xl border border-border bg-muted/30 p-3 space-y-2">
+              <span class="font-semibold text-foreground flex items-center gap-1.5">
+                <ExternalLink class="w-3.5 h-3.5 text-primary" />
+                Customer Portal Direct Access URL:
+              </span>
+              <div class="bg-background border border-border p-2.5 rounded-lg font-mono text-[11px] break-all select-all text-foreground">
+                {{ generatedPortalUrl }}
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-blue-200 bg-blue-50 dark:bg-blue-950/40 dark:border-blue-900 p-3 text-xs text-blue-800 dark:text-blue-300 space-y-1">
+              <span class="font-semibold block">Mailhog Email Delivery:</span>
+              <p>
+                You can inspect the dispatched email message in Mailhog at <a href="http://localhost:8025" target="_blank" class="underline font-mono">http://localhost:8025</a>.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter class="flex sm:justify-between items-center gap-2">
+            <a
+              :href="generatedPortalUrl || '#'"
+              target="_blank"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-semibold text-primary hover:bg-muted"
+            >
+              <ExternalLink class="w-3.5 h-3.5" />
+              Open Customer Portal
+            </a>
+            <Button size="sm" @click="isSendCustomerDialogOpen = false">
+              Done
             </Button>
           </DialogFooter>
         </DialogContent>

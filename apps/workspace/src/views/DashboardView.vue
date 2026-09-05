@@ -26,7 +26,9 @@ onMounted(async () => {
     return;
   }
   const org = await authStore.fetchProfile();
-  if (org && !org.onboardingCompleted) {
+  // Only the Org Admin gets the onboarding wizard; other roles inherit the
+  // organization's details and work straight away.
+  if (org && !org.onboardingCompleted && authStore.state.user?.role === 'org_admin') {
     router.push('/onboarding');
   }
 });
@@ -63,18 +65,10 @@ onMounted(async () => {
             <Button
               variant="secondary"
               class="font-semibold shadow-xs"
-              @click="router.push('/quotations/new')"
-            >
-              <FileText class="w-4 h-4 mr-1.5" />
-              New Quotation
-            </Button>
-            <Button
-              variant="outline"
-              class="font-semibold shadow-xs bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/20 border-primary-foreground/20"
               @click="router.push('/quotations')"
             >
               <FileText class="w-4 h-4 mr-1.5" />
-              View Deals
+              Quotations & Deals
             </Button>
             <Button
               variant="outline"

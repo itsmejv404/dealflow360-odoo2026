@@ -80,6 +80,18 @@ const batchPriceMatrixSchema = z.object({
 });
 
 export class CatalogController {
+  /**
+   * Validates the request body and throws a 400 HttpError (never a raw
+   * ZodError, which would surface as an opaque 500).
+   */
+  private parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
+    const result = schema.safeParse(body);
+    if (!result.success) {
+      throw new HttpError(400, result.error.issues[0]?.message || 'Invalid request payload');
+    }
+    return result.data;
+  }
+
   // ================= CATEGORIES =================
 
   async listCategories(req: Request, res: Response): Promise<void> {
@@ -90,7 +102,7 @@ export class CatalogController {
 
   async createCategory(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
-    const validated = createCategorySchema.parse(req.body);
+    const validated = this.parseBody(createCategorySchema, req.body);
     const category = await catalogService.createCategory(orgId, validated);
     res.status(201).json({ category });
   }
@@ -98,7 +110,7 @@ export class CatalogController {
   async updateCategory(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
     const id = req.params.id as string;
-    const validated = updateCategorySchema.parse(req.body);
+    const validated = this.parseBody(updateCategorySchema, req.body);
     const category = await catalogService.updateCategory(orgId, id, validated);
     res.json({ category });
   }
@@ -120,7 +132,7 @@ export class CatalogController {
 
   async createTier(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
-    const validated = createTierSchema.parse(req.body);
+    const validated = this.parseBody(createTierSchema, req.body);
     const tier = await catalogService.createTier(orgId, validated);
     res.status(201).json({ tier });
   }
@@ -128,7 +140,7 @@ export class CatalogController {
   async updateTier(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
     const id = req.params.id as string;
-    const validated = updateTierSchema.parse(req.body);
+    const validated = this.parseBody(updateTierSchema, req.body);
     const tier = await catalogService.updateTier(orgId, id, validated);
     res.json({ tier });
   }
@@ -164,7 +176,7 @@ export class CatalogController {
 
   async createProduct(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
-    const validated = createProductSchema.parse(req.body);
+    const validated = this.parseBody(createProductSchema, req.body);
     const product = await catalogService.createProduct(orgId, validated);
     res.status(201).json({ product });
   }
@@ -172,7 +184,7 @@ export class CatalogController {
   async updateProduct(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
     const id = req.params.id as string;
-    const validated = updateProductSchema.parse(req.body);
+    const validated = this.parseBody(updateProductSchema, req.body);
     const product = await catalogService.updateProduct(orgId, id, validated);
     res.json({ product });
   }
@@ -194,7 +206,7 @@ export class CatalogController {
 
   async batchUpdatePriceListMatrix(req: Request, res: Response): Promise<void> {
     const orgId = req.tenant!.orgId;
-    const validated = batchPriceMatrixSchema.parse(req.body);
+    const validated = this.parseBody(batchPriceMatrixSchema, req.body);
     const result = await catalogService.batchUpdatePriceListMatrix(orgId, validated.items);
     res.json(result);
   }

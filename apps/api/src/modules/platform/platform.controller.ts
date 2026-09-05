@@ -117,6 +117,20 @@ export class PlatformController {
       next(err);
     }
   }
+
+  async listAuditLogs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = req.params.id;
+      if (!id) {
+        throw new HttpError(400, 'Organization ID parameter required');
+      }
+      const limit = req.query.limit ? Number(req.query.limit) : 100;
+      const logs = await platformService.getOrganizationAuditLogs(id, limit);
+      res.json({ data: logs });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const platformController = new PlatformController();
