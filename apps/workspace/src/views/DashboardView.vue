@@ -14,6 +14,7 @@ import {
   Layers,
   Users,
   FileText,
+  Boxes,
 } from 'lucide-vue-next';
 
 const router = useRouter();
@@ -121,6 +122,26 @@ onMounted(async () => {
               </div>
               <div class="flex items-center text-xs font-medium text-primary">
                 <span>Open Catalog</span>
+                <ArrowRight class="w-3.5 h-3.5 ml-1 group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+
+            <div
+              v-if="['org_admin', 'ops'].includes(authStore.state.user?.role || '')"
+              class="border border-border/70 rounded-xl p-5 hover:border-primary/50 transition-all cursor-pointer bg-card/50 flex flex-col justify-between space-y-4 group"
+              @click="router.push('/warehouses')"
+            >
+              <div class="space-y-2">
+                <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
+                  <Boxes class="w-5 h-5" />
+                </div>
+                <h3 class="font-semibold text-base text-foreground group-hover:text-primary transition-colors">Warehouses & Inventory</h3>
+                <p class="text-xs text-muted-foreground leading-relaxed">
+                  Live stock across your warehouses, split-shipment shipping rules, and inventory adjustments.
+                </p>
+              </div>
+              <div class="flex items-center text-xs font-medium text-primary">
+                <span>Open Warehouses</span>
                 <ArrowRight class="w-3.5 h-3.5 ml-1 group-hover:translate-x-1 transition-transform" />
               </div>
             </div>

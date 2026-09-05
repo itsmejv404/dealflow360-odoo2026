@@ -45,13 +45,13 @@ const form = ref({
 });
 
 const currencies = [
+  { code: 'INR', name: 'INR — Indian Rupee (₹)' },
   { code: 'USD', name: 'USD — US Dollar ($)' },
   { code: 'EUR', name: 'EUR — Euro (€)' },
   { code: 'GBP', name: 'GBP — British Pound (£)' },
   { code: 'CAD', name: 'CAD — Canadian Dollar (CA$)' },
   { code: 'AUD', name: 'AUD — Australian Dollar (AU$)' },
   { code: 'JPY', name: 'JPY — Japanese Yen (¥)' },
-  { code: 'INR', name: 'INR — Indian Rupee (₹)' },
 ];
 
 const timezones = [

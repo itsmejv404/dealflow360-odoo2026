@@ -7,7 +7,7 @@ import RiskScoreBadge from '../components/quotations/RiskScoreBadge.vue';
 import AuditTrailTimeline from '../components/quotations/AuditTrailTimeline.vue';
 import { apiRequest } from '../lib/api';
 import { formatCurrency, marginTone } from '../lib/currency';
-import { statusLabel, billingLabel } from '../lib/labels';
+import { statusLabel, billingLabel, fulfillmentStatusLabel } from '../lib/labels';
 import { getSocket } from '../lib/socket';
 import { authStore } from '../lib/auth';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
@@ -54,6 +54,8 @@ import {
   MessagesSquare,
   ArrowLeftRight,
   FileEdit,
+  Boxes,
+  Pencil,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -985,11 +987,195 @@ function restoreDispatchedPortalModal() {
   }
 }
 
+// ==================== PHASE 16 — ORDER FULFILLMENT (Stage 4) ====================
+
+interface FulfillmentAllocation {
+  fulfillmentLineId: string;
+  warehouseId: string;
+  warehouseName: string;
+  warehouseCode: string;
+  quantity: number;
+}
+
+interface FulfillmentLineView {
+  quotationLineId: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  orderedQuantity: number;
+  allocations: FulfillmentAllocation[];
+  allocatedTotal: number;
+  shortfall: number;
+  lineStatus: 'fulfilled' | 'ready' | 'split' | 'partial' | 'shortfall';
+}
+
+interface FulfillmentPlanView {
+  plan: {
+    id: string;
+    status: 'proposed' | 'accepted';
+    shipmentCount: number;
+    deliveryExtendedDays: number;
+    extraChargeNote: string | null;
+    isOverridden: boolean;
+    proposedAt: string;
+    acceptedAt: string | null;
+  };
+  quotation: {
+    id: string;
+    quotationNumber: string;
+    status: string;
+    customerName: string;
+    totalAmount: number;
+    currency: string;
+  };
+  lines: FulfillmentLineView[];
+}
+
+const fulfillmentPlan = ref<FulfillmentPlanView | null>(null);
+const isFulfillmentLoading = ref(false);
+const isFulfillmentBusy = ref<string | null>(null);
+const fulfillmentError = ref<string | null>(null);
+const fulfillmentNotice = ref<string | null>(null);
+const canManageFulfillment = computed(() =>
+  ['org_admin', 'ops'].includes(authStore.state.user?.role || '')
+);
+const isFulfillable = computed(
+  () => isEditMode.value && ['approved', 'confirmed'].includes(quotationStatus.value)
+);
+
+// Inline per-line override editor state
+const overrideLineId = ref<string | null>(null);
+const overrideWarehouseId = ref<string>('');
+const overrideQuantity = ref<number | null>(null);
+const overrideWarehouseOptions = ref<Array<{ id: string; name: string; available: number }>>([]);
+
+function fulfillmentLineBadge(status: FulfillmentLineView['lineStatus']): { label: string; class: string } {
+  return fulfillmentStatusLabel(status);
+}
+
+async function loadFulfillment() {
+  if (!isFulfillable.value || !quoteId.value) {
+    fulfillmentPlan.value = null;
+    return;
+  }
+  isFulfillmentLoading.value = true;
+  try {
+    fulfillmentPlan.value = await apiRequest<FulfillmentPlanView>(
+      `/api/fulfillment/quotation/${quoteId.value}`
+    );
+    fulfillmentError.value = null;
+  } catch (err: any) {
+    fulfillmentPlan.value = null;
+    fulfillmentError.value = err.message || 'Failed to load the fulfillment plan';
+  } finally {
+    isFulfillmentLoading.value = false;
+  }
+}
+
+async function regenerateFulfillment() {
+  if (!quoteId.value) return;
+  isFulfillmentBusy.value = 'regenerate';
+  fulfillmentError.value = null;
+  try {
+    fulfillmentPlan.value = await apiRequest<FulfillmentPlanView>(
+      `/api/fulfillment/quotation/${quoteId.value}/propose`,
+      { method: 'POST', body: '{}' }
+    );
+    fulfillmentNotice.value = 'Split proposal regenerated.';
+    setTimeout(() => {
+      if (fulfillmentNotice.value === 'Split proposal regenerated.') fulfillmentNotice.value = null;
+    }, 2500);
+  } catch (err: any) {
+    fulfillmentError.value = err.message || 'Failed to regenerate the split proposal';
+  } finally {
+    isFulfillmentBusy.value = null;
+  }
+}
+
+async function openOverride(line: FulfillmentLineView) {
+  overrideLineId.value = line.quotationLineId;
+  overrideQuantity.value = line.orderedQuantity;
+  overrideWarehouseId.value = line.allocations[0]?.warehouseId ?? '';
+  // Live availability per warehouse for this product (read is open to all roles).
+  try {
+    const matrix = await apiRequest<any>('/api/warehouses/stock');
+    const row = matrix.rows?.find((r: any) => r.productId === line.productId);
+    overrideWarehouseOptions.value = (matrix.warehouses || [])
+      .filter((w: any) => w.status === 'active')
+      .map((w: any) => ({ id: w.id, name: w.name, available: row?.quantities?.[w.id] ?? 0 }));
+  } catch {
+    overrideWarehouseOptions.value = [];
+  }
+}
+
+function cancelOverride() {
+  overrideLineId.value = null;
+  overrideWarehouseId.value = '';
+  overrideQuantity.value = null;
+}
+
+async function saveOverride(line: FulfillmentLineView) {
+  const firstAllocation = line.allocations[0];
+  if (!firstAllocation) return; // shortfall-only lines get new stock via inventory first
+  if (!overrideWarehouseId.value || !overrideQuantity.value || overrideQuantity.value < 1) {
+    fulfillmentError.value = 'Pick a warehouse and a quantity of at least 1.';
+    return;
+  }
+  isFulfillmentBusy.value = line.quotationLineId;
+  fulfillmentError.value = null;
+  try {
+    fulfillmentPlan.value = await apiRequest<FulfillmentPlanView>(
+      `/api/fulfillment/lines/${firstAllocation.fulfillmentLineId}/allocations`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          allocations: [{ warehouseId: overrideWarehouseId.value, quantity: overrideQuantity.value }],
+        }),
+      }
+    );
+    fulfillmentNotice.value = 'Line reassigned — fulfillment updated.';
+    cancelOverride();
+    setTimeout(() => {
+      if (fulfillmentNotice.value === 'Line reassigned — fulfillment updated.') fulfillmentNotice.value = null;
+    }, 2500);
+  } catch (err: any) {
+    fulfillmentError.value = err.message || 'Failed to reassign the line';
+  } finally {
+    isFulfillmentBusy.value = null;
+  }
+}
+
+async function acceptFulfillment() {
+  if (!quoteId.value) return;
+  const plan = fulfillmentPlan.value;
+  const totalToDeduct = plan?.lines.reduce((sum, l) => sum + l.allocatedTotal, 0) ?? 0;
+  if (!window.confirm(`Accept this fulfillment plan and deduct ${totalToDeduct} unit(s) from warehouse stock?`)) {
+    return;
+  }
+  isFulfillmentBusy.value = 'accept';
+  fulfillmentError.value = null;
+  try {
+    fulfillmentPlan.value = await apiRequest<FulfillmentPlanView>(
+      `/api/fulfillment/quotation/${quoteId.value}/accept`,
+      { method: 'POST', body: '{}' }
+    );
+    fulfillmentNotice.value = 'Fulfillment accepted — warehouse stock has been updated.';
+    await loadAuditTrail(quoteId.value);
+  } catch (err: any) {
+    fulfillmentError.value = err.message || 'Failed to accept the fulfillment plan';
+    // Stock may have drifted — refresh the plan so the user can regenerate.
+    await loadFulfillment();
+  } finally {
+    isFulfillmentBusy.value = null;
+  }
+}
+
 onMounted(() => {
   loadInitialData();
 
   if (isEditMode.value) {
     loadNegotiation();
+    loadFulfillment();
     restoreDispatchedPortalModal();
   }
 
@@ -1018,6 +1204,13 @@ onMounted(() => {
         loadNegotiation();
       }
     });
+
+    // Phase 16: live fulfillment updates (proposals, overrides, acceptance)
+    socket.on('fulfillment:updated', (data: any) => {
+      if (data && data.quotationId === quoteId.value) {
+        loadFulfillment();
+      }
+    });
   } catch (err) {
     console.warn('Socket connection setup error:', err);
   }
@@ -1033,6 +1226,7 @@ onUnmounted(() => {
     socket.off('pricing:updated');
     socket.off('quote:updated');
     socket.off('negotiation:updated');
+    socket.off('fulfillment:updated');
   } catch {
     // Non-fatal
   }
@@ -1617,6 +1811,172 @@ onUnmounted(() => {
                 >
                   Reply
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <!-- Order Fulfillment (Phase 16): proposed split, Ops override, accept -->
+          <Card v-if="isEditMode && isFulfillable" class="border-border bg-card shadow-xs">
+            <CardHeader class="pb-2 border-b border-border/70">
+              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                  <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <Boxes class="w-4 h-4 text-primary" />
+                    Order Fulfillment
+                    <Badge
+                      v-if="fulfillmentPlan"
+                      variant="outline"
+                      class="text-2xs uppercase"
+                      :class="fulfillmentPlan.plan.status === 'accepted'
+                        ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300'
+                        : 'bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300'"
+                    >
+                      {{ fulfillmentPlan.plan.status === 'accepted' ? 'Fulfilled' : 'Proposed' }}
+                    </Badge>
+                  </CardTitle>
+                  <CardDescription class="text-xs">
+                    <template v-if="fulfillmentPlan">
+                      {{ fulfillmentPlan.plan.shipmentCount }}
+                      {{ fulfillmentPlan.plan.shipmentCount === 1 ? 'shipment' : 'shipments' }} ·
+                      {{ fulfillmentPlan.plan.deliveryExtendedDays > 0
+                        ? `Delivery extended by ${fulfillmentPlan.plan.deliveryExtendedDays} days — no extra charge.`
+                        : 'Single-warehouse delivery — no extra charge.' }}
+                    </template>
+                    <template v-else>Live stock split proposal for this order.</template>
+                  </CardDescription>
+                </div>
+                <div v-if="canManageFulfillment && fulfillmentPlan?.plan.status === 'proposed'" class="flex items-center gap-2 shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-7 text-xs"
+                    :disabled="isFulfillmentBusy !== null"
+                    @click="regenerateFulfillment"
+                  >
+                    <RotateCcw class="w-3 h-3 mr-1" :class="{ 'animate-spin': isFulfillmentBusy === 'regenerate' }" />
+                    Regenerate
+                  </Button>
+                  <Button
+                    size="sm"
+                    class="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                    :disabled="isFulfillmentBusy !== null"
+                    @click="acceptFulfillment"
+                  >
+                    <CheckCircle2 class="w-3 h-3 mr-1" :class="{ 'animate-spin': isFulfillmentBusy === 'accept' }" />
+                    Accept Fulfillment
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent class="pt-4 space-y-4">
+              <!-- Feedback -->
+              <div v-if="fulfillmentError" class="p-2 rounded-md bg-destructive/10 text-destructive text-xs">{{ fulfillmentError }}</div>
+              <div v-if="fulfillmentNotice" class="p-2 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs">{{ fulfillmentNotice }}</div>
+
+              <div v-if="isFulfillmentLoading" class="py-8 text-center text-xs text-muted-foreground">
+                <RefreshCw class="w-6 h-6 animate-spin mx-auto text-primary mb-2" />
+                Preparing the stock split proposal...
+              </div>
+
+              <template v-else-if="fulfillmentPlan">
+                <!-- Per-line table -->
+                <div class="rounded-md border border-border overflow-x-auto">
+                  <Table class="min-w-[560px]">
+                    <TableHeader>
+                      <TableRow class="bg-muted/50">
+                        <TableHead class="font-semibold text-xs">Product</TableHead>
+                        <TableHead class="text-center font-semibold text-xs">Ordered</TableHead>
+                        <TableHead class="font-semibold text-xs">Ships From</TableHead>
+                        <TableHead class="text-center font-semibold text-xs">Status</TableHead>
+                        <TableHead v-if="canManageFulfillment && fulfillmentPlan.plan.status === 'proposed'" class="text-right font-semibold text-xs">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow v-for="line in fulfillmentPlan.lines" :key="line.quotationLineId" class="hover:bg-muted/20">
+                        <TableCell>
+                          <div class="text-xs font-semibold text-foreground">{{ line.productName }}</div>
+                          <div class="text-2xs text-muted-foreground">{{ line.sku }}</div>
+                        </TableCell>
+                        <TableCell class="text-center text-xs font-bold text-foreground">
+                          {{ line.orderedQuantity }}
+                        </TableCell>
+                        <TableCell>
+                          <!-- Inline override editor -->
+                          <div v-if="overrideLineId === line.quotationLineId" class="flex flex-wrap items-center gap-1.5 py-1">
+                            <select
+                              v-model="overrideWarehouseId"
+                              class="h-7 px-2 rounded-md border border-input bg-background text-2xs text-foreground"
+                            >
+                              <option :value="''" disabled>Pick warehouse...</option>
+                              <option v-for="w in overrideWarehouseOptions" :key="w.id" :value="w.id">
+                                {{ w.name }} (stock {{ w.available }})
+                              </option>
+                            </select>
+                            <Input
+                              :model-value="overrideQuantity ?? undefined"
+                              @update:model-value="(v: any) => (overrideQuantity = v === null || v === '' ? null : Number(v))"
+                              type="number"
+                              min="1"
+                              class="h-7 w-16 text-center text-2xs"
+                            />
+                            <Button size="sm" class="h-7 text-xs" :disabled="isFulfillmentBusy === line.quotationLineId" @click="saveOverride(line)">
+                              Save
+                            </Button>
+                            <Button variant="outline" size="sm" class="h-7 text-xs" @click="cancelOverride">Cancel</Button>
+                          </div>
+                          <div v-else-if="line.allocations.length > 0" class="flex flex-wrap gap-1.5">
+                            <Badge
+                              v-for="alloc in line.allocations"
+                              :key="alloc.fulfillmentLineId"
+                              variant="outline"
+                              class="text-2xs font-medium bg-muted/40"
+                            >
+                              {{ alloc.quantity }} × {{ alloc.warehouseName }}
+                            </Badge>
+                          </div>
+                          <span v-else class="text-2xs text-muted-foreground">No stock allocated</span>
+                        </TableCell>
+                        <TableCell class="text-center">
+                          <Badge
+                            variant="outline"
+                            class="text-2xs"
+                            :class="fulfillmentLineBadge(line.lineStatus).class"
+                          >
+                            {{ fulfillmentLineBadge(line.lineStatus).label }}
+                          </Badge>
+                        </TableCell>
+                        <TableCell v-if="canManageFulfillment && fulfillmentPlan.plan.status === 'proposed'" class="text-right">
+                          <Button
+                            v-if="line.allocations.length > 0 && overrideLineId !== line.quotationLineId"
+                            variant="ghost"
+                            size="sm"
+                            class="h-7 text-xs"
+                            @click="openOverride(line)"
+                          >
+                            <Pencil class="w-3 h-3 mr-1" />
+                            Reassign
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+
+                <!-- Accepted summary -->
+                <div v-if="fulfillmentPlan.plan.status === 'accepted'" class="p-3 rounded-lg bg-emerald-500/10 border border-emerald-300/50 text-emerald-700 dark:text-emerald-300 text-xs flex items-start gap-2">
+                  <CheckCircle2 class="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Fulfilled{{ fulfillmentPlan.plan.acceptedAt ? ` on ${new Date(fulfillmentPlan.plan.acceptedAt).toLocaleString()}` : '' }} —
+                    stock was deducted from the assigned warehouses.
+                    <template v-if="fulfillmentPlan.plan.deliveryExtendedDays > 0">
+                      Customer delivery was extended by {{ fulfillmentPlan.plan.deliveryExtendedDays }} days at no extra charge.
+                    </template>
+                  </span>
+                </div>
+              </template>
+
+              <div v-else class="text-xs text-muted-foreground text-center py-4 border border-dashed border-border rounded-md">
+                No fulfillment plan yet — it is generated automatically the first time this page is opened.
               </div>
             </CardContent>
           </Card>

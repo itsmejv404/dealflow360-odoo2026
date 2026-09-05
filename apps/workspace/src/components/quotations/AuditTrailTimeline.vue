@@ -18,7 +18,8 @@ import {
   BadgeCheck,
   RotateCcw,
   Pencil,
-  Trash2
+  Trash2,
+  PackageCheck
 } from 'lucide-vue-next';
 
 export interface AuditLogItem {
@@ -171,6 +172,12 @@ function getActionInfo(action: string) {
         label: 'Deal Re-opened by Customer',
         color: 'text-indigo-600 bg-indigo-50 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-800',
         icon: RotateCcw,
+      };
+    case 'fulfillment_accepted':
+      return {
+        label: 'Fulfillment Accepted — Stock Reserved',
+        color: 'text-emerald-600 bg-emerald-50 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800',
+        icon: PackageCheck,
       };
     default:
       return {

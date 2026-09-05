@@ -235,6 +235,93 @@ export async function seedAll() {
     },
   });
 
+  // Warehouses for Acme (Phase 15)
+  const acmeCentralWh = await prisma.warehouse.create({
+    data: {
+      organizationId: acme.id,
+      name: 'Acme Central Warehouse',
+      code: 'WH-ACME-CENTRAL',
+      city: 'Chicago',
+      address: '100 Industrial Parkway, Chicago, IL',
+      isDefault: true,
+    },
+  });
+  const acmeEastWh = await prisma.warehouse.create({
+    data: {
+      organizationId: acme.id,
+      name: 'Acme East Hub',
+      code: 'WH-ACME-EAST',
+      city: 'Boston',
+      address: '12 Harbor Street, Boston, MA',
+    },
+  });
+
+  // Stock levels for Acme (includes an out-of-stock combo for the Ops screen)
+  await prisma.stockLevel.createMany({
+    data: [
+      { organizationId: acme.id, warehouseId: acmeCentralWh.id, productId: acmeProduct1.id, quantity: 12 },
+      { organizationId: acme.id, warehouseId: acmeCentralWh.id, productId: acmeProduct3.id, quantity: 4 },
+      { organizationId: acme.id, warehouseId: acmeCentralWh.id, productId: acmeProduct4.id, quantity: 0 },
+      { organizationId: acme.id, warehouseId: acmeEastWh.id, productId: acmeProduct1.id, quantity: 3 },
+      { organizationId: acme.id, warehouseId: acmeEastWh.id, productId: acmeProduct3.id, quantity: 18 },
+    ],
+  });
+
+  // Shipping rules for Acme (standing policy: splits allowed, never charged to the customer)
+  await prisma.shippingRuleConfig.create({
+    data: {
+      organizationId: acme.id,
+      allowSplitShipments: true,
+      chargeForSplitShipments: false,
+      deliveryExtensionDays: 3,
+      notes: 'Split shipments extend the delivery date at no extra cost to the customer.',
+    },
+  });
+
+  // Approved demo quotation for the fulfillment split (Phase 16):
+  // - Server Rack ×15  → 12 from Central + 3 from East  (split shipment)
+  // - Cable Kit   ×30  → 22 available overall            (shortfall of 8)
+  const acmeAdminUser = await prisma.user.findFirst({ where: { organizationId: acme.id, role: 'org_admin' } });
+  const acmeRepUser = await prisma.user.findFirst({ where: { organizationId: acme.id, role: 'rep' } });
+  const { quotationsService } = await import('../modules/quotations/quotations.service.js');
+  const fulfillmentDemoQuote = await quotationsService.createQuotation(
+    acme.id,
+    acmeRepUser?.id,
+    {
+      customerId: acmeCustomer.id,
+      orderDiscountPercent: 0,
+      notes: 'Data-center expansion order — promised delivery within 2 weeks.',
+      lines: [
+        { productId: acmeProduct1.id, quantity: 15 },
+        { productId: acmeProduct3.id, quantity: 30 },
+      ],
+    }
+  );
+  if (!fulfillmentDemoQuote) {
+    throw new Error('Failed to seed the fulfillment demo quotation');
+  }
+
+  await prisma.quotation.update({
+    where: { id: fulfillmentDemoQuote.id },
+    data: { status: 'approved' },
+  });
+
+  await prisma.approvalRequest.create({
+    data: {
+      organizationId: acme.id,
+      quotationId: fulfillmentDemoQuote.id,
+      stage: 'manager',
+      status: 'approved',
+      assignedRole: 'manager',
+      requestedById: acmeRepUser?.id ?? null,
+      actionedById: acmeAdminUser?.id ?? null,
+      actionedAt: new Date(),
+      reason: 'Seeded demo deal — approved within ceilings.',
+    },
+  });
+
+  console.log('✔ Seeded approved demo quotation for fulfillment split (Phase 16)');
+
   console.log('✔ Seeded Org 1: Acme Corp with Products & Co-Purchase Affinities');
 
   // 4. Org 2: Globex Corporation
@@ -350,6 +437,45 @@ export async function seedAll() {
       coPurchaseCount: 35,
       affinityScore: 0.91,
       recommendationReason: 'Frequently deployed with Quantum Cluster (91% affinity)',
+    },
+  });
+
+  // Warehouses for Globex (Phase 15)
+  const globexMainWh = await prisma.warehouse.create({
+    data: {
+      organizationId: globex.id,
+      name: 'Globex Main Depot',
+      code: 'WH-GLBX-MAIN',
+      city: 'Berlin',
+      address: 'Friedrichstraße 44, 10117 Berlin, Germany',
+      isDefault: true,
+    },
+  });
+  const globexNorthWh = await prisma.warehouse.create({
+    data: {
+      organizationId: globex.id,
+      name: 'Globex North Depot',
+      code: 'WH-GLBX-NORTH',
+      city: 'Hamburg',
+      address: 'Hafenstraße 8, 20359 Hamburg, Germany',
+    },
+  });
+
+  await prisma.stockLevel.createMany({
+    data: [
+      { organizationId: globex.id, warehouseId: globexMainWh.id, productId: globexProduct1.id, quantity: 7 },
+      { organizationId: globex.id, warehouseId: globexMainWh.id, productId: globexProduct2.id, quantity: 2 },
+      { organizationId: globex.id, warehouseId: globexNorthWh.id, productId: globexProduct2.id, quantity: 26 },
+    ],
+  });
+
+  await prisma.shippingRuleConfig.create({
+    data: {
+      organizationId: globex.id,
+      allowSplitShipments: true,
+      chargeForSplitShipments: false,
+      deliveryExtensionDays: 4,
+      notes: 'EU fulfillment: split shipments are absorbed by Globex, delivery extends instead.',
     },
   });
 

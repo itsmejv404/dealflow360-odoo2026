@@ -14,7 +14,9 @@ import { recommendationsRouter } from './modules/recommendations/recommendations
 import { rulebookRouter } from './modules/rulebook/rulebook.routes.js';
 import { tenantDemoRouter } from './modules/tenant-demo/demo.routes.js';
 import { usersRouter } from './modules/users/users.routes.js';
+import { warehousesRouter } from './modules/warehouses/warehouses.routes.js';
 import { errorHandler, notFoundHandler } from './shared/errors.js';
+import { fulfillmentRouter } from './modules/fulfillment/fulfillment.routes.js';
 
 export function createApp(): express.Express {
   const app = express();
@@ -37,6 +39,8 @@ export function createApp(): express.Express {
   app.use('/api/recommendations', recommendationsRouter);
   app.use('/api/rulebook', rulebookRouter);
   app.use('/api/users', usersRouter);
+  app.use('/api/warehouses', warehousesRouter);
+  app.use('/api/fulfillment', fulfillmentRouter);
   app.use('/api/demo', tenantDemoRouter);
 
   app.use(notFoundHandler);

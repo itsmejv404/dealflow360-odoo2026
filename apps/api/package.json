@@ -16,7 +16,9 @@
     "test:platform": "tsx src/scripts/verify-phase3.ts",
     "test:onboarding": "tsx src/scripts/verify-phase4.ts",
     "test:auth": "tsx src/scripts/verify-phase5.ts",
-    "test:negotiation": "tsx src/modules/negotiation/negotiation.test-isolation.ts"
+    "test:negotiation": "tsx src/modules/negotiation/negotiation.test-isolation.ts",
+    "test:warehouses": "tsx src/modules/warehouses/warehouses.test-isolation.ts",
+    "test:fulfillment": "tsx src/modules/fulfillment/fulfillment.test-isolation.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

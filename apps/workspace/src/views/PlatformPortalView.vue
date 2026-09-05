@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { apiRequest } from '@/lib/api';
 import { formatCurrency, marginTone } from '@/lib/currency';
 import { authStore } from '@/lib/auth';
+import brandLogo from '@/assets/dataflow-logo.png';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,7 +18,6 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import {
-  ShieldAlert,
   Building2,
   Users,
   Package,
@@ -231,22 +231,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-muted/30 flex flex-col">
-    <!-- Super Admin Header -->
-    <header class="border-b border-border bg-card/90 backdrop-blur-sm sticky top-0 z-30 px-6 py-3.5 flex items-center justify-between shadow-xs">
+  <div class="min-h-screen bg-orange-50/60 dark:bg-orange-950/20 flex flex-col">
+    <!-- Platform Header -->
+    <header class="bg-white/70 dark:bg-card/70 backdrop-blur-md border-b border-orange-200/70 dark:border-orange-900/60 sticky top-0 z-30 px-6 py-3.5 flex items-center justify-between shadow-xs">
       <div class="flex items-center gap-3">
-        <div class="grid size-9 place-items-center rounded-xl bg-amber-600 text-white">
-          <ShieldAlert class="w-5 h-5" />
-        </div>
-        <div>
-          <div class="flex items-center gap-2">
-            <span class="font-bold text-base tracking-tight">DealFlow360</span>
-            <Badge variant="outline" class="border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 text-xs uppercase font-semibold">
-              Super Admin Console
-            </Badge>
-          </div>
-          <p class="text-xs text-muted-foreground">Platform-wide organization governance and control</p>
-        </div>
+        <img :src="brandLogo" alt="DealFlow360" class="h-11 w-auto object-contain" />
+        <span class="font-bold text-base tracking-tight">DealFlow360</span>
       </div>
 
       <div class="flex items-center gap-4">
@@ -257,7 +247,7 @@ onMounted(async () => {
         <Button
           variant="outline"
           size="sm"
-          class="border-border hover:bg-muted"
+          class="border-orange-300/60 text-orange-700 dark:text-orange-300 hover:bg-orange-500/10 hover:text-orange-700 dark:hover:text-orange-300"
           @click="handleLogout"
         >
           <LogOut class="w-4 h-4 mr-1.5" />
@@ -280,8 +270,8 @@ onMounted(async () => {
       </Alert>
 
       <!-- Activation Token Banner if generated -->
-      <div v-if="latestInviteToken" class="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-2">
-        <div class="flex items-center gap-2 text-amber-700 dark:text-amber-300 font-semibold text-sm">
+      <div v-if="latestInviteToken" class="rounded-xl border border-orange-500/40 bg-orange-500/10 p-4 space-y-2">
+        <div class="flex items-center gap-2 text-orange-700 dark:text-orange-300 font-semibold text-sm">
           <Mail class="w-4 h-4" />
           Generated Admin Activation Link:
         </div>
@@ -299,7 +289,7 @@ onMounted(async () => {
         <Card class="border-border shadow-xs">
           <CardHeader class="pb-3">
             <div class="flex items-center gap-2">
-              <Building2 class="w-4 h-4 text-amber-600" />
+              <Building2 class="w-4 h-4 text-orange-600" />
               <CardTitle class="text-base font-semibold">Create Organization</CardTitle>
             </div>
             <CardDescription class="text-xs">
@@ -331,7 +321,7 @@ onMounted(async () => {
                 type="submit"
                 size="sm"
                 :disabled="isCreating || !newOrg.name.trim()"
-                class="bg-amber-600 hover:bg-amber-700 text-white font-semibold h-8 text-xs"
+                class="bg-orange-600 hover:bg-orange-700 text-white font-semibold h-8 text-xs"
               >
                 <Plus class="w-3.5 h-3.5 mr-1" />
                 {{ isCreating ? 'Creating...' : 'Provision Organization' }}
@@ -344,7 +334,7 @@ onMounted(async () => {
         <Card class="border-border shadow-xs">
           <CardHeader class="pb-3">
             <div class="flex items-center gap-2">
-              <Mail class="w-4 h-4 text-amber-600" />
+              <Mail class="w-4 h-4 text-orange-600" />
               <CardTitle class="text-base font-semibold">Invite Organization Admin</CardTitle>
             </div>
             <CardDescription class="text-xs">
@@ -382,7 +372,7 @@ onMounted(async () => {
                 type="submit"
                 size="sm"
                 :disabled="isInviting || !inviteData.orgId || !inviteData.email"
-                class="bg-amber-600 hover:bg-amber-700 text-white font-semibold h-8 text-xs"
+                class="bg-orange-600 hover:bg-orange-700 text-white font-semibold h-8 text-xs"
               >
                 <Mail class="w-3.5 h-3.5 mr-1" />
                 {{ isInviting ? 'Sending Invite...' : 'Send Activation Invite' }}
@@ -397,7 +387,7 @@ onMounted(async () => {
         <CardHeader class="pb-3 flex flex-row items-center justify-between">
           <div>
             <div class="flex items-center gap-2">
-              <Building2 class="w-4 h-4 text-amber-600" />
+              <Building2 class="w-4 h-4 text-orange-600" />
               <CardTitle class="text-base font-semibold">Organizations Directory</CardTitle>
             </div>
             <CardDescription class="text-xs">
@@ -444,7 +434,7 @@ onMounted(async () => {
 
           <div class="rounded-lg border border-border overflow-x-auto">
             <table class="w-full text-left text-xs min-w-[640px]">
-              <thead class="bg-muted/50 text-muted-foreground border-b border-border font-medium">
+              <thead class="bg-orange-50/80 dark:bg-orange-950/40 text-orange-800 dark:text-orange-200 border-b border-orange-200/70 dark:border-orange-900 font-medium">
                 <tr>
                   <th class="p-3">Organization</th>
                   <th class="p-3">Status</th>
@@ -465,11 +455,11 @@ onMounted(async () => {
                 <tr
                   v-for="org in organizations"
                   :key="org.id"
-                  class="hover:bg-muted/50 transition-colors"
+                  class="hover:bg-orange-50/60 dark:hover:bg-orange-950/30 transition-colors"
                 >
                   <td class="p-3 font-semibold">
                     <div class="flex items-center gap-2">
-                      <div class="size-6 rounded bg-primary/10 text-primary grid place-items-center text-xs font-bold shrink-0">
+                      <div class="size-6 rounded bg-orange-500/15 text-orange-700 dark:text-orange-300 grid place-items-center text-xs font-bold shrink-0">
                         {{ org.name.substring(0, 2).toUpperCase() }}
                       </div>
                       <span class="truncate">{{ org.name }}</span>
@@ -501,7 +491,7 @@ onMounted(async () => {
                         @click="openAuditModal(org)"
                         title="View activity history"
                       >
-                        <History class="w-3 h-3 mr-1 text-primary" />
+                        <History class="w-3 h-3 mr-1 text-orange-600" />
                         Activity
                       </Button>
                       <Button
@@ -530,9 +520,9 @@ onMounted(async () => {
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
     >
       <div class="bg-card border border-border rounded-xl shadow-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in-0 zoom-in-95 duration-150">
-        <div class="px-6 py-4 border-b border-border flex items-center justify-between bg-muted/40">
+        <div class="px-6 py-4 border-b border-border flex items-center justify-between bg-orange-50/70 dark:bg-orange-950/40">
           <div class="flex items-center gap-2.5">
-            <div class="p-2 rounded-lg bg-primary/10 text-primary">
+            <div class="p-2 rounded-lg bg-orange-500/15 text-orange-600">
               <ShieldCheck class="w-5 h-5" />
             </div>
             <div>
@@ -552,7 +542,7 @@ onMounted(async () => {
 
         <div class="p-6 overflow-y-auto flex-1 space-y-4">
           <div v-if="isLoadingAuditLogs" class="text-center py-12 text-muted-foreground text-xs">
-            <RefreshCw class="w-5 h-5 animate-spin mx-auto mb-2 text-primary" />
+            <RefreshCw class="w-5 h-5 animate-spin mx-auto mb-2 text-orange-600" />
             Loading audit records...
           </div>
           <div v-else-if="auditLogs.length === 0" class="text-center py-12 text-muted-foreground text-xs">
@@ -581,7 +571,7 @@ onMounted(async () => {
               </div>
 
               <div class="flex items-center gap-2 text-muted-foreground">
-                <UserCheck class="w-3.5 h-3.5 text-primary" />
+                <UserCheck class="w-3.5 h-3.5 text-orange-600" />
                 <span class="font-medium text-foreground">{{ log.actorName || log.actorEmail || 'System/Unknown' }}</span>
                 <span v-if="log.actorRole" class="text-[10px] uppercase font-mono px-1 rounded bg-muted">
                   ({{ log.actorRole }})

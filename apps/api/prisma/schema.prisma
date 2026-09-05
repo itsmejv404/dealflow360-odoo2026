@@ -49,6 +49,11 @@ model Organization {
   negotiationComments NegotiationComment[]
   changeRequests      ChangeRequest[]
   counterProposals    CounterProposal[]
+  warehouses          Warehouse[]
+  stockLevels         StockLevel[]
+  shippingRuleConfig  ShippingRuleConfig?
+  fulfillmentPlans    FulfillmentPlan[]
+  fulfillmentLines    FulfillmentLine[]
 
   @@map("organizations")
 }
@@ -155,6 +160,7 @@ model Product {
   orderLines     OrderLine[]
   priceListItems PriceListItem[]
   quotationLines QuotationLine[]
+  stockLevels    StockLevel[]
   primaryAffinities      ProductAffinity[] @relation("PrimaryAffinity")
   recommendedAffinities  ProductAffinity[] @relation("RecommendedAffinity")
 
@@ -301,6 +307,7 @@ model Quotation {
   negotiationComments NegotiationComment[]
   changeRequests      ChangeRequest[]
   counterProposals    CounterProposal[]
+  fulfillmentPlans    FulfillmentPlan[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, quotationNumber])
@@ -340,6 +347,7 @@ model QuotationLine {
   negotiationComments NegotiationComment[]
   changeRequests      ChangeRequest[]
   counterProposals    CounterProposal[]
+  fulfillmentLines    FulfillmentLine[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -406,7 +414,7 @@ model AuditLog {
   userId         String?  @map("user_id")
   userEmail      String?  @map("user_email")
   userRole       String?  @map("user_role")
-  action         String   // "created" | "updated" | "deleted" | "submitted_for_approval" | "manager_approved" | "finance_escalated" | "finance_approved" | "rejected" | "edited" | "auto_approved" | "sent_to_customer" | "customer_commented" | "change_requested" | "counter_proposed" | "counter_accepted" | "counter_declined" | "change_request_accepted" | "change_request_declined" | "customer_confirmed" | "reentered_approval" | "deal_reopened"
+  action         String   // "created" | "updated" | "deleted" | "submitted_for_approval" | "manager_approved" | "finance_escalated" | "finance_approved" | "rejected" | "edited" | "auto_approved" | "sent_to_customer" | "customer_commented" | "change_requested" | "counter_proposed" | "counter_accepted" | "counter_declined" | "change_request_accepted" | "change_request_declined" | "customer_confirmed" | "reentered_approval" | "deal_reopened" | "fulfillment_accepted"
   reason         String?
   metadata       Json?
   createdAt      DateTime @default(now()) @map("created_at")
@@ -420,7 +428,7 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// ==================== PHASE 14 — NEGOTIATION & RE-APPROVAL ====================
+// ==================== PHASE 14 - NEGOTIATION & RE-APPROVAL ====================
 
 model NegotiationComment {
   id             String   @id @default(uuid())
@@ -504,4 +512,114 @@ model CounterProposal {
   @@map("counter_proposals")
 }
 
+// ==================== PHASE 15 - WAREHOUSES & INVENTORY ====================
 
+model Warehouse {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  code           String // e.g. "WH-CENTRAL"
+  address        String?
+  city           String?
+  isDefault      Boolean  @default(false) @map("is_default")
+  status         String   @default("active") // "active" | "inactive"
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stockLevels  StockLevel[]
+  fulfillmentLines FulfillmentLine[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("warehouses")
+}
+
+model StockLevel {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  warehouseId    String   @map("warehouse_id")
+  productId      String   @map("product_id")
+  quantity       Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse    @relation(fields: [organizationId, warehouseId], references: [organizationId, id], onDelete: Cascade)
+  product      Product      @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, warehouseId, productId])
+  @@index([organizationId])
+  @@index([organizationId, productId])
+  @@map("stock_levels")
+}
+
+model ShippingRuleConfig {
+  id                       String   @id @default(uuid())
+  organizationId           String   @unique @map("organization_id")
+  allowSplitShipments      Boolean  @default(true) @map("allow_split_shipments")
+  chargeForSplitShipments  Boolean  @default(false) @map("charge_for_split_shipments")
+  deliveryExtensionDays    Int      @default(3) @map("delivery_extension_days")
+  notes                    String?
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("shipping_rule_configs")
+}
+
+// ==================== PHASE 16 - FULFILLMENT SPLIT PROPOSAL ====================
+
+model FulfillmentPlan {
+  id                   String    @id @default(uuid())
+  organizationId       String    @map("organization_id")
+  quotationId          String    @map("quotation_id")
+  status               String    @default("proposed") @map("status") // "proposed" | "accepted"
+  shipmentCount        Int       @default(0) @map("shipment_count")
+  deliveryExtendedDays Int       @default(0) @map("delivery_extended_days")
+  extraChargeNote      String?   @map("extra_charge_note")
+  isOverridden         Boolean   @default(false) @map("is_overridden")
+  overriddenById       String?   @map("overridden_by_id")
+  overriddenAt         DateTime? @map("overridden_at")
+  acceptedById         String?   @map("accepted_by_id")
+  acceptedAt           DateTime? @map("accepted_at")
+  proposedAt           DateTime  @default(now()) @map("proposed_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotation    Quotation        @relation(fields: [organizationId, quotationId], references: [organizationId, id], onDelete: Cascade)
+  lines        FulfillmentLine[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, quotationId])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("fulfillment_plans")
+}
+
+model FulfillmentLine {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  planId          String   @map("plan_id")
+  quotationLineId String   @map("quotation_line_id")
+  productId       String   @map("product_id")
+  warehouseId     String   @map("warehouse_id")
+  quantity        Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan          FulfillmentPlan @relation(fields: [organizationId, planId], references: [organizationId, id], onDelete: Cascade)
+  quotationLine QuotationLine   @relation(fields: [organizationId, quotationLineId], references: [organizationId, id], onDelete: Cascade)
+  warehouse     Warehouse       @relation(fields: [organizationId, warehouseId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, planId, quotationLineId, warehouseId])
+  @@index([organizationId])
+  @@index([organizationId, planId])
+  @@map("fulfillment_lines")
+}

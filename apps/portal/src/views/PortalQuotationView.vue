@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { customerAuth } from '@/lib/auth';
 import { portalApiRequest } from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import brandLogo from '@/assets/dataflow-logo.png';
 import {
   Calendar,
   CheckCircle2,
@@ -514,7 +515,7 @@ function getStatusBadge(status: string) {
     case 'rejected':
       return { label: 'Not Accepted', class: 'bg-red-500/10 text-red-600 border-red-300' };
     default:
-      return { label: status.toUpperCase(), class: 'bg-muted text-muted-foreground border-border' };
+      return { label: status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()), class: 'bg-muted text-muted-foreground border-border' };
   }
 }
 
@@ -530,7 +531,7 @@ function requestStatusBadge(status: string) {
     case 'superseded':
       return { label: 'Superseded', class: 'bg-muted text-muted-foreground border-border' };
     default:
-      return { label: status, class: 'bg-muted text-muted-foreground border-border' };
+      return { label: status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()), class: 'bg-muted text-muted-foreground border-border' };
   }
 }
 
@@ -551,8 +552,8 @@ onMounted(() => {
           >
             <img :src="logoSrc" :alt="branding?.name" class="h-full object-contain" />
           </div>
-          <div v-else class="size-9 rounded-xl bg-primary/10 text-primary grid place-items-center font-bold text-sm">
-            {{ branding?.name ? branding.name.substring(0, 2).toUpperCase() : 'DF' }}
+          <div v-else class="size-9 rounded-xl bg-primary/10 grid place-items-center">
+            <img :src="brandLogo" alt="DealFlow360" class="size-6 object-contain" />
           </div>
           <div>
             <h1 class="font-bold text-base text-foreground leading-none">
@@ -631,17 +632,12 @@ onMounted(() => {
           </div>
 
           <!-- Prepared For (Customer) -->
-          <div class="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-2 text-xs">
-            <div class="flex items-center gap-2 font-semibold text-foreground">
-              <User class="w-4 h-4 text-primary" />
-              <span>Prepared For:</span>
-            </div>
-            <div class="text-muted-foreground space-y-0.5">
-              <p class="font-medium text-foreground text-sm">{{ quotation.customer.name }}</p>
-              <p v-if="quotation.customer.company" class="font-medium">{{ quotation.customer.company }}</p>
-              <p>{{ quotation.customer.email }}</p>
-              <p v-if="quotation.customer.phone">{{ quotation.customer.phone }}</p>
-            </div>
+          <div class="rounded-xl border border-border/70 bg-muted/20 p-4 flex items-center gap-3 text-xs">
+            <User class="w-4 h-4 text-primary shrink-0" />
+            <span class="font-semibold text-foreground">Prepared For:</span>
+            <span class="text-muted-foreground truncate">
+              {{ quotation.customer.name }}<template v-if="quotation.customer.company"> · {{ quotation.customer.company }}</template>
+            </span>
           </div>
 
           <!-- Notes Callout if present -->
@@ -664,7 +660,7 @@ onMounted(() => {
           </div>
 
           <div class="overflow-x-auto">
-            <table class="w-full text-left text-xs">
+            <table class="w-full text-left text-xs min-w-[560px]">
               <thead class="bg-muted/40 text-muted-foreground border-b border-border font-medium">
                 <tr>
                   <th class="p-4">Item & Description</th>
@@ -678,14 +674,11 @@ onMounted(() => {
               <tbody class="divide-y divide-border">
                 <tr v-for="line in quotation.lines" :key="line.id" class="hover:bg-muted/20">
                   <td class="p-4 space-y-1">
-                    <div class="font-semibold text-foreground text-sm flex items-center gap-2">
+                    <div class="font-semibold text-foreground text-sm flex items-center gap-2 flex-wrap">
                       {{ line.product.name }}
                       <span v-if="line.product.category" class="text-[10px] font-normal px-2 py-0.5 rounded-full bg-muted border border-border text-muted-foreground">
                         {{ line.product.category.name }}
                       </span>
-                    </div>
-                    <div class="text-[11px] text-muted-foreground font-mono">
-                      SKU: {{ line.product.sku }}
                     </div>
                     <div v-if="line.product.description" class="text-[11px] text-muted-foreground pt-0.5">
                       {{ line.product.description }}
@@ -745,11 +738,6 @@ onMounted(() => {
 
               <div v-if="quotation.orderDiscountPercent > 0" class="flex justify-between text-emerald-600 text-[11px]">
                 <span>(Includes {{ quotation.orderDiscountPercent }}% Order Discount)</span>
-              </div>
-
-              <div class="flex justify-between text-muted-foreground">
-                <span>Estimated Tax:</span>
-                <span class="font-mono text-foreground">{{ formatCurrency(quotation.taxTotal, branding?.currency) }}</span>
               </div>
 
               <div class="pt-2 border-t border-border flex justify-between items-baseline font-bold text-base text-foreground">

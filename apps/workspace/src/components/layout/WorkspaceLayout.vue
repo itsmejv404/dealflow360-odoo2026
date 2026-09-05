@@ -2,6 +2,7 @@
 import { computed, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { authStore } from '@/lib/auth';
+import brandLogo from '@/assets/dataflow-logo.png';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -27,12 +28,15 @@ import {
   FileText,
   Menu,
   SlidersHorizontal,
+  Warehouse as WarehouseIcon,
 } from 'lucide-vue-next';
 
 const router = useRouter();
 const route = useRoute();
 
 const isOrgAdmin = computed(() => authStore.state.user?.role === 'org_admin');
+const isOps = computed(() => authStore.state.user?.role === 'ops');
+const canManageInventory = computed(() => isOrgAdmin.value || isOps.value);
 const canApprove = computed(() =>
   ['manager', 'finance', 'org_admin'].includes(authStore.state.user?.role || '')
 );
@@ -89,8 +93,12 @@ function getRoleDisplay(role?: string): string {
               :alt="authStore.state.organization?.name || 'Org Logo'"
               class="object-contain p-0.5"
             />
-            <AvatarFallback class="rounded-lg bg-primary text-primary-foreground font-bold text-xs">
-              {{ authStore.state.organization?.name?.charAt(0) || 'D' }}
+            <AvatarFallback class="rounded-lg bg-primary/5 p-0.5">
+              <img
+                :src="brandLogo"
+                alt="DealFlow360"
+                class="h-full w-full object-contain"
+              />
             </AvatarFallback>
           </Avatar>
           <span class="font-bold text-foreground tracking-tight text-sm truncate max-w-[140px] sm:max-w-[200px]">
@@ -103,6 +111,7 @@ function getRoleDisplay(role?: string): string {
           <router-link to="/" :class="[navLinkClass, isActive('/') ? navLinkActiveClass : '']">
             <LayoutDashboard class="w-4 h-4 shrink-0" />
             <span class="hidden xl:inline">Dashboard</span>
+            <Test/>
           </router-link>
 
           <router-link to="/catalog" :class="[navLinkClass, isActive('/catalog') ? navLinkActiveClass : '']">
@@ -122,6 +131,15 @@ function getRoleDisplay(role?: string): string {
           >
             <ShieldCheck class="w-4 h-4 shrink-0" />
             <span class="hidden xl:inline">Approvals</span>
+          </router-link>
+
+          <router-link
+            v-if="canManageInventory"
+            to="/warehouses"
+            :class="[navLinkClass, isActive('/warehouses') ? navLinkActiveClass : '']"
+          >
+            <WarehouseIcon class="w-4 h-4 shrink-0" />
+            <span class="hidden xl:inline">Warehouses</span>
           </router-link>
 
           <!-- Org Admin: configuration grouped behind one trigger -->
@@ -180,6 +198,10 @@ function getRoleDisplay(role?: string): string {
               <DropdownMenuItem v-if="canApprove" @click="router.push('/approvals')">
                 <ShieldCheck class="mr-2 h-4 w-4" />
                 <span>Approvals</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem v-if="canManageInventory" @click="router.push('/warehouses')">
+                <WarehouseIcon class="mr-2 h-4 w-4" />
+                <span>Warehouses</span>
               </DropdownMenuItem>
               <template v-if="isOrgAdmin">
                 <DropdownMenuSeparator />

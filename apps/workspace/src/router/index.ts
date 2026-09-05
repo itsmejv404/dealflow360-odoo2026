@@ -12,6 +12,7 @@ import QuotationBuilderView from '../views/QuotationBuilderView.vue';
 import ApprovalsView from '../views/ApprovalsView.vue';
 import SuperAdminLoginView from '../views/SuperAdminLoginView.vue';
 import PlatformPortalView from '../views/PlatformPortalView.vue';
+import WarehousesView from '../views/WarehousesView.vue';
 import { authStore } from '../lib/auth';
 
 export const router = createRouter({
@@ -97,6 +98,12 @@ export const router = createRouter({
       meta: { requiresAdmin: true },
     },
     {
+      path: '/warehouses',
+      name: 'warehouses',
+      component: WarehousesView,
+      meta: { requiresRoles: ['org_admin', 'ops'] },
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       redirect: '/',
@@ -140,6 +147,12 @@ router.beforeEach((to, _from, next) => {
   }
 
   if (to.meta.requiresAdmin && authStore.state.user?.role !== 'org_admin') {
+    return next({ name: 'dashboard' });
+  }
+
+  // Role-list gated routes (e.g. Warehouses & Inventory for org_admin + ops).
+  const requiredRoles = to.meta.requiresRoles as string[] | undefined;
+  if (requiredRoles && !requiredRoles.includes(authStore.state.user?.role || '')) {
     return next({ name: 'dashboard' });
   }
 
