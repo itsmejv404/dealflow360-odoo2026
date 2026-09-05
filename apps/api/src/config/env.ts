@@ -16,6 +16,7 @@ const envSchema = z.object({
   MINIO_BUCKET: z.string().min(1).default('dealflow'),
   SMTP_HOST: z.string().min(1).default('mailhog'),
   SMTP_PORT: z.coerce.number().int().positive().default(1025),
+  JWT_SECRET: z.string().min(1).default('dealflow360-super-secret-key-for-dev-only'),
 });
 
 export type Env = z.infer<typeof envSchema>;

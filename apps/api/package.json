@@ -10,22 +10,36 @@
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:deploy": "prisma migrate deploy"
+    "prisma:deploy": "prisma migrate deploy",
+    "seed": "tsx src/scripts/seed.ts",
+    "test:isolation": "tsx src/scripts/verify-phase2.ts",
+    "test:platform": "tsx src/scripts/verify-phase3.ts",
+    "test:onboarding": "tsx src/scripts/verify-phase4.ts",
+    "test:auth": "tsx src/scripts/verify-phase5.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"
   },
   "dependencies": {
-    "@prisma/client": "^6.5.0",
     "@aws-sdk/client-s3": "^3.758.0",
+    "@aws-sdk/s3-request-presigner": "^3.1127.0",
+    "@prisma/client": "^6.5.0",
+    "bcryptjs": "^3.0.3",
     "express": "^4.21.2",
     "ioredis": "^5.6.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.3.0",
+    "nodemailer": "^10.0.0",
     "pino": "^9.6.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.2.0",
     "@types/node": "^22.13.10",
+    "@types/nodemailer": "^8.0.1",
     "prisma": "^6.5.0",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"

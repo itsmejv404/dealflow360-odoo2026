@@ -10,11 +10,13 @@ Guidance for coding agents working in this repo. Read `milestones.md` (24-phase 
 - **portal** (`apps/portal`): second Vue app — **does not exist yet**; scaffold it in Phase 13.
 - Postgres 16 (Prisma), Redis 7 (ioredis; BullMQ later), MinIO (AWS SDK v3, path-style), Mailhog, Nginx.
 - Everything runs in Docker with hot reload (`tsx watch`, `vite --host`). Repo is bind-mounted at `/repo`; root `node_modules` is a named volume shared by containers.
+- **No init containers on purpose**: `npm install`, `prisma generate`, MinIO bucket creation, and `migrate deploy` are manual steps — see `SETUP.md`. Compose only starts long-running services.
 
 ## Commands (host)
 
-- Boot: `docker compose up --build` · Stop: `docker compose down` · Reset: `docker compose down -v`
-- Prisma (inside api container): `docker compose exec api npx prisma migrate dev --name <name>`
+- Boot: `docker compose up -d` · Stop: `docker compose down` · Reset: `docker compose down -v` (then redo SETUP.md)
+- First-time/reset setup: follow `SETUP.md` (`npm run setup:install`, `setup:generate`, `setup:bucket`, `migrate:deploy`)
+- Prisma (inside api container): `npm run migrate -- --name <name>` · apply: `npm run migrate:deploy` · status: `npm run migrate:status`
 - Typecheck all: `docker compose exec api npm run typecheck` (root script runs it for every workspace)
 
 ## API module conventions
@@ -45,7 +47,7 @@ Module-per-domain under `apps/api/src/modules/<domain>/`:
 
 ## Migrations
 
-- Prisma migrations in `apps/api/prisma/migrations/`, applied automatically at boot by the one-shot `migrate` service (`prisma migrate deploy`).
+- Prisma migrations in `apps/api/prisma/migrations/`, applied **manually** with `npm run migrate:deploy` (see SETUP.md) — nothing auto-migrates at boot.
 - The `000000000000_init` baseline proves tooling only; real schema starts Phase 2.
 
 ## Multi-tenancy rules (from Phase 2 onward — non-negotiable)

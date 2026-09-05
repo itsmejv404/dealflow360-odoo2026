@@ -14,5 +14,11 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
+    proxy: {
+      '/api': {
+        target: process.env.API_URL || 'http://api:3000',
+        changeOrigin: true,
+      },
+    },
   },
 });
