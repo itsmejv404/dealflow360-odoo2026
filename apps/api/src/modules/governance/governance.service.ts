@@ -170,7 +170,7 @@ export class GovernanceService {
 
     let riskLevel: 'low' | 'medium' | 'high' = 'low';
     let approvalRouting: 'none' | 'manager' | 'manager_finance' = 'none';
-    let routingReason = 'Quotation is within all rulebook discount ceilings. Auto-approved.';
+    let routingReason = 'All discounts are within the rulebook ceilings. No review needed.';
 
     const crossesFinanceThreshold =
       requireFinanceAboveThreshold &&
@@ -182,15 +182,15 @@ export class GovernanceService {
     if (crossesFinanceThreshold) {
       riskLevel = 'high';
       approvalRouting = 'manager_finance';
-      routingReason = `High Risk: Discount exposure crosses Finance escalation threshold (+${financeThreshold}% over ceiling or Blended Risk Score of ${blendedScore}/100). Requires Sales Manager approval and Finance escalation.`;
+      routingReason = `High risk: discount exposure goes well beyond the ceilings (risk score ${blendedScore}/100). Needs Sales Manager approval and then Finance sign-off.`;
     } else if (crossesManagerThreshold || !autoApproveWithinCeilings) {
       riskLevel = 'medium';
       approvalRouting = 'manager';
-      routingReason = `Medium Risk: One or more lines exceed category discount ceilings (Blended Risk Score: ${blendedScore}/100). Requires Sales Manager approval.`;
+      routingReason = `One or more lines exceed the category discount ceilings (risk score ${blendedScore}/100). Needs Sales Manager approval.`;
     } else {
       riskLevel = 'low';
       approvalRouting = 'none';
-      routingReason = `Low Risk: All lines comply with ${tier.name} tier category ceilings (Blended Risk Score: ${blendedScore}/100). Auto-approved.`;
+      routingReason = `All lines comply with the ${tier.name} tier ceilings (risk score ${blendedScore}/100). Ready to send.`;
     }
 
     return {

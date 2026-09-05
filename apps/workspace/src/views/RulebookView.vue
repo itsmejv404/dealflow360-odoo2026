@@ -30,7 +30,6 @@ interface CustomerTier {
   code: string;
   description?: string;
   defaultDiscountPercent: number;
-  rank: number;
 }
 
 interface ProductCategory {
@@ -186,9 +185,7 @@ onMounted(() => {
             <h1 class="text-2xl font-bold tracking-tight text-foreground">
               Discount Rulebook
             </h1>
-            <Badge variant="outline" class="text-xs bg-primary/5 text-primary border-primary/20">
-              Stage 1 Governance
-            </Badge>
+
           </div>
           <p class="text-sm text-muted-foreground mt-1">
             Set the maximum allowed discount for each Product Category across Customer Tiers.
@@ -288,7 +285,7 @@ onMounted(() => {
                         {{ tier.name }}
                       </Badge>
                       <span class="text-2xs text-muted-foreground font-normal">
-                        Rank {{ tier.rank }} · Base {{ tier.defaultDiscountPercent }}%
+                        Base {{ tier.defaultDiscountPercent }}% discount
                       </span>
                     </div>
                   </TableHead>

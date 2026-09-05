@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 import { platformService } from './platform.service.js';
 
 const loginSchema = z.object({
@@ -27,7 +27,7 @@ export class PlatformController {
     try {
       const parsed = loginSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const result = await platformService.loginSuperAdmin(parsed.data.email, parsed.data.password);
       res.json({ data: result });
@@ -62,7 +62,7 @@ export class PlatformController {
     try {
       const parsed = createOrgSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const org = await platformService.createOrganization(parsed.data);
       res.status(201).json({ data: org });
@@ -79,7 +79,7 @@ export class PlatformController {
       }
       const parsed = updateOrgSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const updated = await platformService.updateOrganization(id, parsed.data);
       res.json({ data: updated });
@@ -96,7 +96,7 @@ export class PlatformController {
       }
       const parsed = inviteOrgAdminSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const invite = await platformService.inviteOrgAdmin(id, parsed.data.email);
       res.status(201).json({ data: invite });

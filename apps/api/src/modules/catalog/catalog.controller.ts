@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { catalogService } from './catalog.service.js';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 
 const createCategorySchema = z.object({
   name: z.string().min(1, 'Category name is required').max(100),
@@ -20,7 +20,6 @@ const createTierSchema = z.object({
   code: z.string().min(1, 'Tier code is required').max(50),
   description: z.string().max(500).optional(),
   defaultDiscountPercent: z.number().min(0).max(100).optional(),
-  rank: z.number().int().min(1).optional(),
 });
 
 const updateTierSchema = z.object({
@@ -28,7 +27,6 @@ const updateTierSchema = z.object({
   code: z.string().min(1).max(50).optional(),
   description: z.string().max(500).optional(),
   defaultDiscountPercent: z.number().min(0).max(100).optional(),
-  rank: z.number().int().min(1).optional(),
 });
 
 const createProductSchema = z.object({
@@ -37,7 +35,8 @@ const createProductSchema = z.object({
   categoryId: z.string().uuid().optional(),
   description: z.string().max(2000).optional(),
   price: z.number().positive('Price must be greater than 0'),
-  costPrice: z.number().min(0).optional(),
+  // Accept an explicit null from clients that clear the field.
+  costPrice: z.number().min(0).nullable().optional(),
   billingFrequency: z.enum(['one_time', 'monthly', 'quarterly', 'annual']).optional(),
   status: z.enum(['active', 'archived']).optional(),
   tierPrices: z
@@ -87,7 +86,7 @@ export class CatalogController {
   private parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
     const result = schema.safeParse(body);
     if (!result.success) {
-      throw new HttpError(400, result.error.issues[0]?.message || 'Invalid request payload');
+      throw new HttpError(400, friendlyZodMessage(result.error.issues));
     }
     return result.data;
   }

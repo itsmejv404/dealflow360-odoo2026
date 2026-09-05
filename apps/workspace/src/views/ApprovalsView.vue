@@ -22,6 +22,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { apiRequest } from '@/lib/api';
+import { formatCurrency, marginTone } from '@/lib/currency';
 import { getSocket } from '@/lib/socket';
 import RiskScoreBadge from '@/components/quotations/RiskScoreBadge.vue';
 import {
@@ -128,7 +129,7 @@ onUnmounted(() => {
             Approval Management & Inbox
           </h1>
           <p class="text-sm text-muted-foreground mt-1">
-            Review and action quotations requiring discount governance authorization.
+            Review and action quotations that need a discount review before approval.
           </p>
         </div>
 
@@ -237,7 +238,7 @@ onUnmounted(() => {
                 <MessageSquareQuote class="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
                 <div>
                   <span class="font-semibold text-foreground">Submission Context & Reason:</span>
-                  <p class="text-muted-foreground mt-0.5">{{ req.reason || 'Discount policy breach requires governance review.' }}</p>
+                  <p class="text-muted-foreground mt-0.5">{{ req.reason || 'Discount rules require a review before approval.' }}</p>
                 </div>
               </div>
             </div>
@@ -246,7 +247,7 @@ onUnmounted(() => {
               <div>
                 <span class="text-muted-foreground block text-2xs uppercase">Gross Subtotal</span>
                 <span class="font-semibold text-foreground font-mono text-sm">
-                  ${{ Number(req.quotation?.subtotal || 0).toFixed(2) }}
+                  {{ formatCurrency(req.quotation?.subtotal) }}
                 </span>
               </div>
               <div>
@@ -258,12 +259,15 @@ onUnmounted(() => {
               <div>
                 <span class="text-muted-foreground block text-2xs uppercase">Total Quoted</span>
                 <span class="font-bold text-foreground font-mono text-sm">
-                  ${{ Number(req.quotation?.totalAmount || 0).toFixed(2) }}
+                  {{ formatCurrency(req.quotation?.totalAmount) }}
                 </span>
               </div>
               <div>
                 <span class="text-muted-foreground block text-2xs uppercase">Profit Margin</span>
-                <span class="font-bold text-emerald-600 dark:text-emerald-400 font-mono text-sm">
+                <span
+                  class="font-bold font-mono text-sm"
+                  :class="marginTone(Number(req.quotation?.totalMarginPercent || 0)).text"
+                >
                   {{ Number(req.quotation?.totalMarginPercent || 0) }}%
                 </span>
               </div>
@@ -326,12 +330,12 @@ onUnmounted(() => {
           <div class="space-y-4 py-2">
             <div class="space-y-2">
               <Label class="text-xs font-semibold">
-                Mandatory Explanation / Justification <span class="text-destructive">*</span>
+                Reason (required) <span class="text-destructive">*</span>
               </Label>
               <Textarea
                 v-model="actionReason"
                 rows="3"
-                placeholder="Provide mandatory business context or reason for this governance decision..."
+                placeholder="Provide mandatory business context or reason for this decision..."
                 class="text-xs"
               />
             </div>

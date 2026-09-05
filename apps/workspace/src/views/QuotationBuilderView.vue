@@ -6,6 +6,8 @@ import UpsellPanel, { type UpsellSuggestionItem } from '../components/quotations
 import RiskScoreBadge from '../components/quotations/RiskScoreBadge.vue';
 import AuditTrailTimeline from '../components/quotations/AuditTrailTimeline.vue';
 import { apiRequest } from '../lib/api';
+import { formatCurrency, marginTone } from '../lib/currency';
+import { statusLabel, billingLabel } from '../lib/labels';
 import { getSocket } from '../lib/socket';
 import { authStore } from '../lib/auth';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
@@ -714,11 +716,6 @@ async function handleCreateCustomer() {
   }
 }
 
-function formatCurrency(val: number | string | undefined): string {
-  const num = Number(val || 0);
-  return '$' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 function getCategoryBadgeClass(code?: string): string {
   switch (code) {
     case 'hardware':
@@ -733,13 +730,7 @@ function getCategoryBadgeClass(code?: string): string {
 }
 
 function getMarginBadgeClass(marginPct: number): string {
-  if (marginPct >= 30) {
-    return 'bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 border-emerald-300';
-  } else if (marginPct >= 15) {
-    return 'bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 border-amber-300';
-  } else {
-    return 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 border-red-300';
-  }
+  return marginTone(marginPct).bg;
 }
 
 watch(selectedCustomerId, () => {
@@ -1069,7 +1060,7 @@ onUnmounted(() => {
               {{ isEditMode ? quotationNumber : 'New Quotation' }}
             </span>
             <Badge v-if="isEditMode" variant="outline" class="text-xs uppercase">
-              {{ quotationStatus }}
+              {{ statusLabel(quotationStatus) }}
             </Badge>
           </div>
           <h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
@@ -1131,7 +1122,7 @@ onUnmounted(() => {
             class="h-9 border-blue-300 bg-blue-50 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 hover:bg-blue-100"
             :disabled="isSendingToCustomer"
             @click="handleSendToCustomer"
-            title="Dispatch customer portal magic link email via Mailhog"
+            title="Email the customer their portal link"
           >
             <Send v-if="!isSendingToCustomer" class="w-4 h-4 mr-1.5 text-blue-600" />
             <RotateCcw v-else class="w-4 h-4 mr-1.5 animate-spin text-blue-600" />
@@ -1278,7 +1269,7 @@ onUnmounted(() => {
                             v-if="line.billingFrequency !== 'one_time'"
                             class="text-2xs text-primary font-medium"
                           >
-                            ({{ line.billingFrequency }})
+                            {{ billingLabel(line.billingFrequency) }}
                           </span>
                         </div>
                         <!-- Line-Level Risk & Ceiling Indicator -->
@@ -1309,18 +1300,15 @@ onUnmounted(() => {
 
                       <!-- Unit Price Input -->
                       <TableCell class="text-right py-3">
-                        <div class="relative flex items-center justify-end">
-                          <span class="text-2xs text-muted-foreground mr-1">$</span>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            v-model.number="line.unitPrice"
-                            @input="debouncedRecalculate"
-                            @change="debouncedRecalculate"
-                            class="h-8 w-24 text-right text-xs"
-                          />
-                        </div>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          v-model.number="line.unitPrice"
+                          @input="debouncedRecalculate"
+                          @change="debouncedRecalculate"
+                          class="h-8 w-24 text-right text-xs ml-auto"
+                        />
                         <div class="text-2xs text-muted-foreground mt-0.5">
                           Cost: {{ formatCurrency(line.product?.costPrice || 0) }}
                         </div>
@@ -1353,7 +1341,7 @@ onUnmounted(() => {
                         </div>
                         <div
                           class="text-2xs font-semibold mt-0.5"
-                          :class="line.marginPercent >= 25 ? 'text-emerald-600 dark:text-emerald-400' : line.marginPercent >= 10 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'"
+                          :class="marginTone(line.marginPercent).text"
                         >
                           Margin: {{ Number(line.marginPercent).toFixed(1) }}%
                         </div>
@@ -1814,15 +1802,15 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- Margin Indicator -->
+              <!-- Margin Indicator: green on profit, red on loss -->
               <div
                 class="p-3 rounded-lg border space-y-2 transition-colors"
-                :class="totals.totalMarginPercent >= 30 ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800' : totals.totalMarginPercent >= 15 ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800' : 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800'"
+                :class="marginTone(totals.totalMarginPercent).bg"
               >
                 <div class="flex items-center justify-between">
                   <span
                     class="font-semibold flex items-center gap-1"
-                    :class="totals.totalMarginPercent >= 30 ? 'text-emerald-800 dark:text-emerald-300' : totals.totalMarginPercent >= 15 ? 'text-amber-800 dark:text-amber-300' : 'text-red-800 dark:text-red-300'"
+                    :class="marginTone(totals.totalMarginPercent).text"
                   >
                     <Sparkles class="w-3.5 h-3.5" />
                     Total Deal Margin
@@ -1836,9 +1824,9 @@ onUnmounted(() => {
                 </div>
                 <div
                   class="flex justify-between text-2xs"
-                  :class="totals.totalMarginPercent >= 30 ? 'text-emerald-700 dark:text-emerald-300' : totals.totalMarginPercent >= 15 ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300'"
+                  :class="marginTone(totals.totalMarginPercent).text"
                 >
-                  <span>Gross Profit Margin:</span>
+                  <span>Gross Profit:</span>
                   <span class="font-bold">{{ formatCurrency(totals.totalMargin) }}</span>
                 </div>
                 <div class="flex justify-between text-3xs text-muted-foreground">
@@ -2135,25 +2123,8 @@ onUnmounted(() => {
               <span class="font-semibold block">One Link, One Channel:</span>
               <p>
                 The customer reviews, comments, counters discounts, and confirms the
-                deal — all through this portal link. You'll see every message live in
-                the Customer Negotiation panel below.
-              </p>
-            </div>
-
-            <div class="rounded-xl border border-border bg-muted/30 p-3 space-y-2">
-              <span class="font-semibold text-foreground flex items-center gap-1.5">
-                <ExternalLink class="w-3.5 h-3.5 text-primary" />
-                Customer Portal Direct Access URL:
-              </span>
-              <div class="bg-background border border-border p-2.5 rounded-lg font-mono text-[11px] break-all select-all text-foreground">
-                {{ generatedPortalUrl }}
-              </div>
-            </div>
-
-            <div class="rounded-xl border border-blue-200 bg-blue-50 dark:bg-blue-950/40 dark:border-blue-900 p-3 text-xs text-blue-800 dark:text-blue-300 space-y-1">
-              <span class="font-semibold block">Mailhog Email Delivery:</span>
-              <p>
-                You can inspect the dispatched email message in Mailhog at <a href="http://localhost:8025" target="_blank" class="underline font-mono">http://localhost:8025</a>.
+                deal — all through the link we just emailed them. You'll see every
+                message live in the Customer Negotiation panel below.
               </p>
             </div>
           </div>

@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { portalService } from './portal.service.js';
 import { negotiationService } from '../negotiation/negotiation.service.js';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 
 const commentSchema = z.object({
   lineId: z.string().uuid().nullable().optional(),
@@ -180,7 +180,7 @@ export class PortalController {
 
       const parsed = commentSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid comment payload');
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
 
       const comment = await negotiationService.addComment(
@@ -204,7 +204,7 @@ export class PortalController {
 
       const parsed = changeRequestSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid change request payload');
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
 
       const changeRequest = await negotiationService.createChangeRequest(
@@ -228,7 +228,7 @@ export class PortalController {
 
       const parsed = counterSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid counter proposal payload');
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
 
       const counter = await negotiationService.createCounterProposal(

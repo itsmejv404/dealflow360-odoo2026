@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 import { onboardingService } from './onboarding.service.js';
 
 const activateSchema = z.object({
@@ -27,7 +27,7 @@ export class OnboardingController {
     try {
       const parsed = activateSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const result = await onboardingService.activateAccount({
         token: parsed.data.token,

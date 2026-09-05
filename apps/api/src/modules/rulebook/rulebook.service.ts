@@ -45,7 +45,7 @@ export class RulebookService {
 
     const [categories, tiers] = await Promise.all([
       prisma.productCategory.findMany({ where: { organizationId: orgId } }),
-      prisma.customerTier.findMany({ where: { organizationId: orgId }, orderBy: { rank: 'asc' } }),
+      prisma.customerTier.findMany({ where: { organizationId: orgId }, orderBy: [{ createdAt: 'asc' }, { name: 'asc' }] }),
     ]);
 
     const existingCeilings = await prisma.discountCeiling.findMany({
@@ -125,7 +125,7 @@ export class RulebookService {
     const [tiers, categories, ceilings, approvalConfig] = await Promise.all([
       prisma.customerTier.findMany({
         where: { organizationId: orgId },
-        orderBy: { rank: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { name: 'asc' }],
       }),
       prisma.productCategory.findMany({
         where: { organizationId: orgId },

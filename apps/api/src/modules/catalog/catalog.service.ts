@@ -19,7 +19,6 @@ export interface CreateTierInput {
   code: string;
   description?: string;
   defaultDiscountPercent?: number;
-  rank?: number;
 }
 
 export interface UpdateTierInput {
@@ -27,7 +26,6 @@ export interface UpdateTierInput {
   code?: string;
   description?: string;
   defaultDiscountPercent?: number;
-  rank?: number;
 }
 
 export interface CreateProductInput {
@@ -36,7 +34,7 @@ export interface CreateProductInput {
   categoryId?: string;
   description?: string;
   price: number;
-  costPrice?: number;
+  costPrice?: number | null;
   billingFrequency?: 'one_time' | 'monthly' | 'quarterly' | 'annual';
   status?: 'active' | 'archived';
   tierPrices?: Array<{ tierId: string; customPrice: number }>;
@@ -109,7 +107,6 @@ export class CatalogService {
             code: 'bronze',
             description: 'Standard retail customer tier',
             defaultDiscountPercent: new Prisma.Decimal(0.0),
-            rank: 1,
           },
           {
             organizationId: orgId,
@@ -117,7 +114,6 @@ export class CatalogService {
             code: 'silver',
             description: 'Preferred customer tier with standard discount',
             defaultDiscountPercent: new Prisma.Decimal(5.0),
-            rank: 2,
           },
           {
             organizationId: orgId,
@@ -125,7 +121,6 @@ export class CatalogService {
             code: 'gold',
             description: 'VIP Enterprise partner tier',
             defaultDiscountPercent: new Prisma.Decimal(15.0),
-            rank: 3,
           },
         ],
       });
@@ -241,7 +236,7 @@ export class CatalogService {
     await this.ensureDefaultCatalog(orgId);
     return prisma.customerTier.findMany({
       where: { organizationId: orgId },
-      orderBy: { rank: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { name: 'asc' }],
     });
   }
 
@@ -270,8 +265,7 @@ export class CatalogService {
           data.defaultDiscountPercent !== undefined
             ? new Prisma.Decimal(data.defaultDiscountPercent)
             : new Prisma.Decimal(0),
-        rank: data.rank ?? 1,
-      },
+        },
     });
   }
 
@@ -313,8 +307,7 @@ export class CatalogService {
         ...(data.defaultDiscountPercent !== undefined && {
           defaultDiscountPercent: new Prisma.Decimal(data.defaultDiscountPercent),
         }),
-        ...(data.rank !== undefined && { rank: data.rank }),
-      },
+        },
     });
   }
 
@@ -473,7 +466,10 @@ export class CatalogService {
           categoryId: data.categoryId || null,
           description: data.description?.trim(),
           price: new Prisma.Decimal(data.price),
-          costPrice: data.costPrice !== undefined ? new Prisma.Decimal(data.costPrice) : null,
+          costPrice:
+            data.costPrice !== undefined && data.costPrice !== null
+              ? new Prisma.Decimal(data.costPrice)
+              : null,
           billingFrequency: data.billingFrequency || 'one_time',
           status: data.status || 'active',
         },
@@ -628,7 +624,7 @@ export class CatalogService {
     const [tiers, products, priceListItems] = await Promise.all([
       prisma.customerTier.findMany({
         where: { organizationId: orgId },
-        orderBy: { rank: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { name: 'asc' }],
       }),
       prisma.product.findMany({
         where: { organizationId: orgId, status: 'active' },

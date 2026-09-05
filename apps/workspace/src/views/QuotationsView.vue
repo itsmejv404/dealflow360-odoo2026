@@ -3,6 +3,8 @@ import { ref, reactive, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import WorkspaceLayout from '../components/layout/WorkspaceLayout.vue';
 import { apiRequest } from '../lib/api';
+import { formatCurrency, marginTone } from '../lib/currency';
+import { statusLabel } from '../lib/labels';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -246,13 +248,8 @@ function getStatusBadge(status: string) {
     case 'rejected':
       return { variant: 'destructive', label: 'Rejected', class: '' };
     default:
-      return { variant: 'outline', label: status, class: '' };
+      return { variant: 'outline', label: statusLabel(status), class: '' };
   }
-}
-
-function formatCurrency(val: number | string | undefined): string {
-  const num = Number(val || 0);
-  return '$' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatDate(iso: string): string {
@@ -282,7 +279,7 @@ onMounted(() => {
             <Badge variant="outline" class="text-xs">Stage 2 Builder</Badge>
           </div>
           <p class="text-sm text-muted-foreground mt-1">
-            Build, configure, discount, and manage tenant-isolated sales quotations.
+            Build, discount, and manage your organization's quotations.
           </p>
         </div>
 
@@ -447,7 +444,10 @@ onMounted(() => {
                     </Badge>
                   </TableCell>
                   <TableCell class="text-right">
-                    <span class="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                    <span
+                      class="text-xs font-semibold"
+                      :class="marginTone(Number(quote.totalMarginPercent)).text"
+                    >
                       {{ Number(quote.totalMarginPercent).toFixed(1) }}%
                     </span>
                     <div class="text-2xs text-muted-foreground">

@@ -3,6 +3,7 @@ import { onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import WorkspaceLayout from '@/components/layout/WorkspaceLayout.vue';
 import { authStore } from '@/lib/auth';
+import { roleLabel } from '@/lib/labels';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -45,7 +46,7 @@ onMounted(async () => {
               <span>Workspace Active</span>
             </Badge>
             <Badge variant="outline" class="text-primary-foreground border-primary-foreground/20">
-              Role: {{ authStore.state.user?.role?.toUpperCase() || 'ORG ADMIN' }}
+              Role: {{ roleLabel(authStore.state.user?.role) }}
             </Badge>
           </div>
 
@@ -135,7 +136,7 @@ onMounted(async () => {
                 </div>
                 <h3 class="font-semibold text-base text-foreground group-hover:text-primary transition-colors">Team & Access Control</h3>
                 <p class="text-xs text-muted-foreground leading-relaxed">
-                  Invite sales reps, managers, finance officers, and manage tenant role assignments.
+                  Invite sales reps, managers, and finance officers, and manage their roles.
                 </p>
               </div>
               <div class="flex items-center text-xs font-medium text-primary">

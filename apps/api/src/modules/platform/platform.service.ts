@@ -38,7 +38,7 @@ export class PlatformService {
   }
 
   async listOrganizations() {
-    return prisma.organization.findMany({
+    const orgs = await prisma.organization.findMany({
       include: {
         _count: {
           select: {
@@ -51,6 +51,28 @@ export class PlatformService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Total profit chain: realized profit per organization, aggregated across
+    // its quotations ( quotation margins are stored per quote in org currency ).
+    const profitByOrg = await prisma.quotation.groupBy({
+      by: ['organizationId'],
+      _sum: { totalMargin: true },
+      _count: { id: true },
+    });
+    const profitMap = new Map(
+      profitByOrg.map((row) => [
+        row.organizationId,
+        {
+          totalProfit: Number(row._sum.totalMargin ?? 0),
+          quotationCount: row._count.id,
+        },
+      ])
+    );
+
+    return orgs.map((org) => ({
+      ...org,
+      profit: profitMap.get(org.id) ?? { totalProfit: 0, quotationCount: 0 },
+    }));
   }
 
   async getOrganizationById(id: string) {

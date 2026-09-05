@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { quotationsService } from './quotations.service.js';
 import { pricingService } from './pricing.service.js';
 import { emitToOrg, emitToQuote } from '../../lib/socket.js';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 
 const createCustomerSchema = z.object({
   tierId: z.string().uuid(),
@@ -61,7 +61,7 @@ export class QuotationsController {
     const orgId = req.tenant!.orgId;
     const parsed = createCustomerSchema.safeParse(req.body);
     if (!parsed.success) {
-      throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid customer input');
+      throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
     }
     const customer = await quotationsService.createCustomer(orgId, parsed.data);
     return res.status(201).json({ customer });
@@ -72,7 +72,7 @@ export class QuotationsController {
     const orgId = req.tenant!.orgId;
     const parsed = calculateQuotationSchema.safeParse(req.body);
     if (!parsed.success) {
-      throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid calculation payload');
+      throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
     }
 
     const calculated = await pricingService.calculateQuotationPricing(
@@ -124,7 +124,7 @@ export class QuotationsController {
     const repId = req.tenant!.userId;
     const parsed = createQuotationSchema.safeParse(req.body);
     if (!parsed.success) {
-      throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid quotation input');
+      throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
     }
 
     const quotation = await quotationsService.createQuotation(orgId, repId, parsed.data);
@@ -144,7 +144,7 @@ export class QuotationsController {
 
     const parsed = updateQuotationSchema.safeParse(req.body);
     if (!parsed.success) {
-      throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid update quotation payload');
+      throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
     }
 
     const tenant = req.tenant!;

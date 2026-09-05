@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 import { tenantDemoService } from './demo.service.js';
 
 const createProductSchema = z.object({
@@ -54,7 +54,7 @@ export class TenantDemoController {
       }
       const parsed = createProductSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const product = await tenantDemoService.createProduct(req.tenantDb, parsed.data);
       res.status(201).json({ data: product });
@@ -82,7 +82,7 @@ export class TenantDemoController {
       }
       const parsed = createOrderLineSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const orderLine = await tenantDemoService.createOrderLine(req.tenantDb, parsed.data);
       res.status(201).json({ data: orderLine });

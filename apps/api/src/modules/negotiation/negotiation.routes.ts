@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { negotiationService } from './negotiation.service.js';
 import { tenantContextMiddleware, requireRoles } from '../../shared/tenant.middleware.js';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 import type { Request, Response, NextFunction } from 'express';
 
 const internalCommentSchema = z.object({
@@ -54,7 +54,7 @@ export class NegotiationController {
 
       const parsed = internalCommentSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid comment payload');
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
 
       const comment = await negotiationService.addComment(
@@ -78,7 +78,7 @@ export class NegotiationController {
 
       const parsed = resolveSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid resolution payload');
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
 
       const result = await negotiationService.resolveChangeRequest(
@@ -103,7 +103,7 @@ export class NegotiationController {
 
       const parsed = resolveSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        throw new HttpError(400, parsed.error.issues[0]?.message || 'Invalid resolution payload');
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
 
       const result = await negotiationService.resolveCounterProposal(

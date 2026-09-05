@@ -112,15 +112,15 @@ export async function seedAll() {
     data: { organizationId: acme.id, name: 'Subscriptions', code: 'subscriptions' },
   });
 
-  // Tiers for Acme
-  const acmeTierGold = await prisma.customerTier.create({
-    data: { organizationId: acme.id, name: 'Gold Partner', code: 'gold', defaultDiscountPercent: 15, rank: 3 },
+  // Tiers for Acme (created Bronze → Silver → Gold so S.No ordering reads naturally)
+  const acmeTierBronze = await prisma.customerTier.create({
+    data: { organizationId: acme.id, name: 'Bronze', code: 'bronze', defaultDiscountPercent: 5 },
   });
   const acmeTierSilver = await prisma.customerTier.create({
-    data: { organizationId: acme.id, name: 'Silver Partner', code: 'silver', defaultDiscountPercent: 10, rank: 2 },
+    data: { organizationId: acme.id, name: 'Silver Partner', code: 'silver', defaultDiscountPercent: 10 },
   });
-  const acmeTierBronze = await prisma.customerTier.create({
-    data: { organizationId: acme.id, name: 'Bronze', code: 'bronze', defaultDiscountPercent: 5, rank: 1 },
+  const acmeTierGold = await prisma.customerTier.create({
+    data: { organizationId: acme.id, name: 'Gold Partner', code: 'gold', defaultDiscountPercent: 15 },
   });
 
   // Customer for Acme
@@ -294,7 +294,7 @@ export async function seedAll() {
 
   // Tiers for Globex
   const globexTierTier1 = await prisma.customerTier.create({
-    data: { organizationId: globex.id, name: 'Tier 1 Enterprise', code: 'tier1', defaultDiscountPercent: 20, rank: 1 },
+    data: { organizationId: globex.id, name: 'Tier 1 Enterprise', code: 'tier1', defaultDiscountPercent: 20 },
   });
 
   // Customer for Globex

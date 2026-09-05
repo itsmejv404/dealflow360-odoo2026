@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue';
+import { ref, onMounted, reactive, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { apiRequest } from '@/lib/api';
+import { formatCurrency, marginTone } from '@/lib/currency';
 import { authStore } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,6 +34,7 @@ import {
   Clock,
   ExternalLink,
   ShieldCheck,
+  TrendingUp,
 } from 'lucide-vue-next';
 
 interface OrgCount {
@@ -65,11 +67,21 @@ interface Organization {
   slug: string;
   status: 'active' | 'suspended';
   createdAt: string;
+  currency?: string;
   _count?: OrgCount;
+  profit?: { totalProfit: number; quotationCount: number };
 }
 
 const router = useRouter();
 const organizations = ref<Organization[]>([]);
+
+// Total profit across the whole chain (sum of each organization's quotation profit).
+const totalChainProfit = computed(() =>
+  organizations.value.reduce((sum, org) => sum + Number(org.profit?.totalProfit ?? 0), 0)
+);
+const chainQuotationCount = computed(() =>
+  organizations.value.reduce((sum, org) => sum + Number(org.profit?.quotationCount ?? 0), 0)
+);
 const isLoading = ref(true);
 const errorMessage = ref<string | null>(null);
 const successMessage = ref<string | null>(null);
@@ -98,7 +110,7 @@ async function openAuditModal(org: Organization) {
     const res = await apiRequest<AuditLogEntry[]>(`/api/platform/organizations/${org.id}/audit-logs`);
     auditLogs.value = res;
   } catch (err: any) {
-    errorMessage.value = err.message || 'Failed to fetch tenant audit logs';
+    errorMessage.value = err.message || 'Failed to fetch organization audit logs';
   } finally {
     isLoadingAuditLogs.value = false;
   }
@@ -173,7 +185,7 @@ async function toggleOrgStatus(org: Organization) {
       body: JSON.stringify({ status: newStatus }),
     });
     org.status = newStatus;
-    successMessage.value = `Organization "${org.name}" status changed to ${newStatus}.`;
+    successMessage.value = `Organization "${org.name}" is now ${newStatus === "active" ? "active" : "suspended"}.`;
   } catch (err: any) {
     errorMessage.value = err.message || 'Failed to update organization status';
   }
@@ -233,7 +245,7 @@ onMounted(async () => {
               Super Admin Console
             </Badge>
           </div>
-          <p class="text-xs text-muted-foreground">Platform-Wide Tenant Governance & Isolation Control</p>
+          <p class="text-xs text-muted-foreground">Platform-wide organization governance and control</p>
         </div>
       </div>
 
@@ -277,7 +289,7 @@ onMounted(async () => {
           <span>http://localhost/activate?token={{ latestInviteToken }}</span>
         </div>
         <p class="text-xs text-muted-foreground">
-          An email has been dispatched via Mailhog. The recipient can visit the activation link above to complete their organization onboarding wizard.
+          An invitation email has been sent. The recipient can visit the activation link above to complete their organization onboarding wizard.
         </p>
       </div>
 
@@ -288,7 +300,7 @@ onMounted(async () => {
           <CardHeader class="pb-3">
             <div class="flex items-center gap-2">
               <Building2 class="w-4 h-4 text-amber-600" />
-              <CardTitle class="text-base font-semibold">Create Tenant Organization</CardTitle>
+              <CardTitle class="text-base font-semibold">Create Organization</CardTitle>
             </div>
             <CardDescription class="text-xs">
               Provision a new isolated organization boundary.
@@ -336,7 +348,7 @@ onMounted(async () => {
               <CardTitle class="text-base font-semibold">Invite Organization Admin</CardTitle>
             </div>
             <CardDescription class="text-xs">
-              Send an onboarding invitation token to a tenant administrator.
+              Send an onboarding invitation to an organization administrator.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -386,10 +398,10 @@ onMounted(async () => {
           <div>
             <div class="flex items-center gap-2">
               <Building2 class="w-4 h-4 text-amber-600" />
-              <CardTitle class="text-base font-semibold">Tenant Organizations Directory</CardTitle>
+              <CardTitle class="text-base font-semibold">Organizations Directory</CardTitle>
             </div>
             <CardDescription class="text-xs">
-              {{ organizations.length }} total tenants registered in platform registry.
+              {{ organizations.length }} organizations registered on the platform.
             </CardDescription>
           </div>
           <Button
@@ -403,16 +415,43 @@ onMounted(async () => {
           </Button>
         </CardHeader>
         <CardContent>
-          <div class="rounded-lg border border-border overflow-hidden">
-            <table class="w-full text-left text-xs">
+          <!-- Total Profit Chain -->
+          <div
+            class="mb-4 p-4 rounded-xl border space-y-1"
+            :class="marginTone(totalChainProfit).bg"
+          >
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <TrendingUp class="w-4 h-4" :class="marginTone(totalChainProfit).text" />
+                <span
+                  class="text-sm font-semibold"
+                  :class="marginTone(totalChainProfit).text"
+                >
+                  Total Profit Chain ({{ organizations.length }} organizations)
+                </span>
+              </div>
+              <span
+                class="text-xl font-bold font-mono"
+                :class="marginTone(totalChainProfit).text"
+              >
+                {{ formatCurrency(totalChainProfit) }}
+              </span>
+            </div>
+            <p class="text-2xs text-muted-foreground">
+              Combined profit across all {{ chainQuotationCount }} quotations on the platform.
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-border overflow-x-auto">
+            <table class="w-full text-left text-xs min-w-[640px]">
               <thead class="bg-muted/50 text-muted-foreground border-b border-border font-medium">
                 <tr>
                   <th class="p-3">Organization</th>
-                  <th class="p-3">Slug</th>
                   <th class="p-3">Status</th>
-                  <th class="p-3">Users</th>
-                  <th class="p-3">Products</th>
-                  <th class="p-3">Invites</th>
+                  <th class="p-3 text-right">Users</th>
+                  <th class="p-3 text-right">Products</th>
+                  <th class="p-3 text-right">Quotes</th>
+                  <th class="p-3 text-right">Total Profit</th>
                   <th class="p-3 text-right">Actions</th>
                 </tr>
               </thead>
@@ -428,24 +467,31 @@ onMounted(async () => {
                   :key="org.id"
                   class="hover:bg-muted/50 transition-colors"
                 >
-                  <td class="p-3 font-semibold flex items-center gap-2">
-                    <div class="size-6 rounded bg-primary/10 text-primary grid place-items-center text-xs font-bold">
-                      {{ org.name.substring(0, 2).toUpperCase() }}
+                  <td class="p-3 font-semibold">
+                    <div class="flex items-center gap-2">
+                      <div class="size-6 rounded bg-primary/10 text-primary grid place-items-center text-xs font-bold shrink-0">
+                        {{ org.name.substring(0, 2).toUpperCase() }}
+                      </div>
+                      <span class="truncate">{{ org.name }}</span>
                     </div>
-                    {{ org.name }}
                   </td>
-                  <td class="p-3 font-mono text-muted-foreground">{{ org.slug }}</td>
                   <td class="p-3">
                     <Badge
                       :variant="org.status === 'active' ? 'secondary' : 'destructive'"
                       class="text-xs uppercase px-2 py-0.5"
                     >
-                      {{ org.status }}
+                      {{ org.status === 'active' ? 'Active' : 'Suspended' }}
                     </Badge>
                   </td>
-                  <td class="p-3 text-muted-foreground">{{ org._count?.users ?? '-' }}</td>
-                  <td class="p-3 text-muted-foreground">{{ org._count?.products ?? '-' }}</td>
-                  <td class="p-3 text-muted-foreground">{{ org._count?.invites ?? '-' }}</td>
+                  <td class="p-3 text-right text-muted-foreground">{{ org._count?.users ?? '-' }}</td>
+                  <td class="p-3 text-right text-muted-foreground">{{ org._count?.products ?? '-' }}</td>
+                  <td class="p-3 text-right text-muted-foreground">{{ org.profit?.quotationCount ?? 0 }}</td>
+                  <td
+                    class="p-3 text-right font-bold font-mono"
+                    :class="marginTone(Number(org.profit?.totalProfit ?? 0)).text"
+                  >
+                    {{ formatCurrency(org.profit?.totalProfit ?? 0, org.currency) }}
+                  </td>
                   <td class="p-3 text-right">
                     <div class="flex items-center justify-end gap-1.5">
                       <Button
@@ -453,10 +499,10 @@ onMounted(async () => {
                         variant="outline"
                         class="h-7 text-xs border-border hover:bg-muted text-foreground"
                         @click="openAuditModal(org)"
-                        title="View Compliance Audit Trail"
+                        title="View activity history"
                       >
                         <History class="w-3 h-3 mr-1 text-primary" />
-                        Audit Trail
+                        Activity
                       </Button>
                       <Button
                         size="sm"
@@ -478,7 +524,7 @@ onMounted(async () => {
       </Card>
     </main>
 
-    <!-- Super Admin Tenant Audit Logs Modal -->
+    <!-- Super Admin Organization Audit Logs Modal -->
     <div
       v-if="isAuditModalOpen"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
@@ -491,12 +537,12 @@ onMounted(async () => {
             </div>
             <div>
               <h3 class="font-bold text-sm tracking-tight flex items-center gap-2">
-                Tenant Audit Trail — {{ selectedOrgForAudit?.name }}
+                Organization Audit Trail — {{ selectedOrgForAudit?.name }}
                 <Badge variant="outline" class="font-mono text-[10px] uppercase">
                   {{ selectedOrgForAudit?.slug }}
                 </Badge>
               </h3>
-              <p class="text-xs text-muted-foreground">Immutable compliance and approval timeline for this tenant</p>
+              <p class="text-xs text-muted-foreground">Immutable activity and approval timeline for this organization</p>
             </div>
           </div>
           <Button variant="ghost" size="sm" class="h-8 px-2" @click="closeAuditModal">
@@ -507,7 +553,7 @@ onMounted(async () => {
         <div class="p-6 overflow-y-auto flex-1 space-y-4">
           <div v-if="isLoadingAuditLogs" class="text-center py-12 text-muted-foreground text-xs">
             <RefreshCw class="w-5 h-5 animate-spin mx-auto mb-2 text-primary" />
-            Loading tenant audit records...
+            Loading audit records...
           </div>
           <div v-else-if="auditLogs.length === 0" class="text-center py-12 text-muted-foreground text-xs">
             <FileText class="w-8 h-8 mx-auto mb-2 opacity-40" />

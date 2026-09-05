@@ -2,6 +2,8 @@
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { formatCurrency, marginTone } from '@/lib/currency';
+import { billingLabel } from '@/lib/labels';
 import {
   Layers,
   TrendingUp,
@@ -38,11 +40,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'add-suggestion', suggestion: UpsellSuggestionItem): void;
 }>();
-
-function formatCurrency(val: number | string | undefined): string {
-  const num = Number(val || 0);
-  return '$' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 
 function getCategoryBadgeClass(code?: string) {
   switch (code) {
@@ -108,7 +105,6 @@ function getCategoryBadgeClass(code?: string) {
                   {{ item.name }}
                 </h4>
                 <div class="flex items-center gap-2 mt-0.5">
-                  <span class="font-mono text-3xs text-muted-foreground">{{ item.sku }}</span>
                   <Badge
                     variant="outline"
                     :class="['text-3xs px-1.5 py-0 font-medium', getCategoryBadgeClass(item.categoryCode)]"
@@ -119,7 +115,7 @@ function getCategoryBadgeClass(code?: string) {
                     v-if="item.billingFrequency !== 'one_time'"
                     class="text-3xs text-primary font-semibold"
                   >
-                    ({{ item.billingFrequency }})
+                    {{ billingLabel(item.billingFrequency) }}
                   </span>
                 </div>
               </div>
@@ -144,9 +140,12 @@ function getCategoryBadgeClass(code?: string) {
                 </span>
               </div>
               <div class="flex items-center gap-1.5 text-3xs">
-                <span class="text-emerald-600 dark:text-emerald-400 font-bold flex items-center">
+                <span
+                  class="font-bold flex items-center"
+                  :class="marginTone(item.deltaMarginAmount).text"
+                >
                   <TrendingUp class="w-2.5 h-2.5 mr-0.5" />
-                  +{{ formatCurrency(item.deltaMarginAmount) }} margin
+                  {{ item.deltaMarginAmount >= 0 ? '+' : '' }}{{ formatCurrency(item.deltaMarginAmount) }} margin
                 </span>
                 <span class="text-muted-foreground">({{ Number(item.marginPercent).toFixed(0) }}%)</span>
               </div>

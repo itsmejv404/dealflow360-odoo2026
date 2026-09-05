@@ -3,6 +3,7 @@ import { ref, onMounted, reactive, computed } from 'vue';
 import WorkspaceLayout from '../components/layout/WorkspaceLayout.vue';
 import { apiRequest } from '../lib/api';
 import { authStore } from '../lib/auth';
+import { formatCurrency as formatMoney } from '../lib/currency';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -57,7 +58,6 @@ interface CustomerTier {
   code: string;
   description?: string;
   defaultDiscountPercent: number;
-  rank: number;
 }
 
 interface TierPriceItem {
@@ -156,7 +156,6 @@ const tierForm = reactive({
   code: '',
   description: '',
   defaultDiscountPercent: 0,
-  rank: 1,
 });
 
 const isOrgAdmin = computed(() => authStore.state.user?.role === 'org_admin');
@@ -285,13 +284,17 @@ async function handleSaveProduct() {
         customPrice: Number(customPrice),
       }));
 
+    const rawCost: number | null | '' = productForm.costPrice ?? null;
+    const parsedCost = rawCost === null || rawCost === ('' as unknown) ? null : Number(rawCost);
+
     const payload = {
       name: productForm.name,
       sku: productForm.sku,
       categoryId: productForm.categoryId || undefined,
       description: productForm.description || undefined,
       price: Number(productForm.price),
-      costPrice: productForm.costPrice ? Number(productForm.costPrice) : null,
+      // Omit empty/zero cost entirely — never send null (it 400s on create).
+      costPrice: parsedCost && parsedCost !== 0 ? parsedCost : undefined,
       billingFrequency: productForm.billingFrequency,
       status: productForm.status,
       tierPrices,
@@ -401,7 +404,6 @@ function openAddTierDialog() {
   tierForm.code = '';
   tierForm.description = '';
   tierForm.defaultDiscountPercent = 0;
-  tierForm.rank = tiers.value.length + 1;
   isTierDialogOpen.value = true;
 }
 
@@ -411,7 +413,6 @@ function openEditTierDialog(t: CustomerTier) {
   tierForm.code = t.code;
   tierForm.description = t.description || '';
   tierForm.defaultDiscountPercent = Number(t.defaultDiscountPercent);
-  tierForm.rank = t.rank;
   isTierDialogOpen.value = true;
 }
 
@@ -423,7 +424,6 @@ async function handleSaveTier() {
     const payload = {
       ...tierForm,
       defaultDiscountPercent: Number(tierForm.defaultDiscountPercent),
-      rank: Number(tierForm.rank),
     };
     if (editingTierId.value) {
       await apiRequest(`/api/catalog/tiers/${editingTierId.value}`, {
@@ -500,10 +500,7 @@ async function handleSaveMatrix() {
 
 function formatCurrency(val?: number | null) {
   if (val === undefined || val === null) return '-';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: authStore.state.organization?.currency || 'USD',
-  }).format(val);
+  return formatMoney(val);
 }
 
 function getBillingCadenceBadge(cadence: string) {
@@ -535,7 +532,7 @@ onMounted(() => {
             Product Catalog & Price Lists
           </h1>
           <p class="text-sm text-slate-500">
-            Configure tenant products, categories, customer tiers, and tier-specific pricing matrix for {{ authStore.state.organization?.name }}.
+            Configure products, categories, customer tiers, and tier-specific pricing for {{ authStore.state.organization?.name }}.
           </p>
         </div>
 
@@ -658,7 +655,7 @@ onMounted(() => {
                 <div>
                   <CardTitle class="text-lg font-semibold text-slate-900">Products Catalog</CardTitle>
                   <CardDescription>
-                    All items available for quotations in this tenant.
+                    All items available for quotations in your organization.
                   </CardDescription>
                 </div>
                 <Badge variant="secondary" class="font-medium text-slate-700">
@@ -826,16 +823,13 @@ onMounted(() => {
                         class="border-l border-slate-200 bg-slate-50/30"
                       >
                         <div v-if="isOrgAdmin" class="space-y-1">
-                          <div class="relative">
-                            <span class="absolute left-2.5 top-2 text-xs text-slate-400">$</span>
-                            <Input
-                              v-model="matrixEdits[`${row.product.id}:${t.id}`]"
-                              type="number"
-                              step="0.01"
-                              placeholder="Auto Discount"
-                              class="pl-6 h-8 text-xs font-mono"
-                            />
-                          </div>
+                          <Input
+                            v-model="matrixEdits[`${row.product.id}:${t.id}`]"
+                            type="number"
+                            step="0.01"
+                            placeholder="Auto Discount"
+                            class="h-8 text-xs"
+                          />
                           <div class="flex items-center justify-between text-2xs text-slate-500 px-1">
                             <span>Effective:</span>
                             <span class="font-semibold text-indigo-700">
@@ -945,7 +939,7 @@ onMounted(() => {
                 <div>
                   <CardTitle class="text-lg font-semibold text-slate-900">Customer Tiers</CardTitle>
                   <CardDescription>
-                    Customer accounts belong to tiers which govern price-list discounts and stage 3 approval boundaries.
+                    Customer accounts belong to tiers which govern their price-list discounts.
                   </CardDescription>
                 </div>
                 <Badge variant="secondary" class="font-medium text-slate-700">
@@ -957,7 +951,7 @@ onMounted(() => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead class="w-16">Rank</TableHead>
+                    <TableHead class="w-16">S.No</TableHead>
                     <TableHead>Tier Name</TableHead>
                     <TableHead>Code</TableHead>
                     <TableHead>Default Discount</TableHead>
@@ -966,11 +960,9 @@ onMounted(() => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow v-for="t in tiers" :key="t.id">
+                  <TableRow v-for="(t, tierIdx) in tiers" :key="t.id">
                     <TableCell>
-                      <Badge variant="outline" class="font-mono text-xs">
-                        #{{ t.rank }}
-                      </Badge>
+                      <span class="text-xs font-semibold text-slate-600">{{ tierIdx + 1 }}</span>
                     </TableCell>
                     <TableCell class="font-semibold text-slate-900 flex items-center gap-1.5">
                       <Award class="w-4 h-4 text-amber-500" />
@@ -1119,7 +1111,7 @@ onMounted(() => {
                     v-model.number="productForm.tierOverrides[t.id]"
                     type="number"
                     step="0.01"
-                    placeholder="Override $"
+                    placeholder="Override price"
                     class="h-7 text-xs bg-white"
                   />
                 </div>
@@ -1208,16 +1200,6 @@ onMounted(() => {
                   step="0.1"
                   min="0"
                   max="100"
-                  required
-                />
-              </div>
-              <div class="grid gap-2">
-                <Label for="tier-rank">Rank (Priority)</Label>
-                <Input
-                  id="tier-rank"
-                  v-model.number="tierForm.rank"
-                  type="number"
-                  min="1"
                   required
                 />
               </div>

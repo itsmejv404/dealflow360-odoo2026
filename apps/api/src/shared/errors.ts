@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { MulterError } from 'multer';
-import { ZodError } from 'zod';
+import { ZodError, type ZodIssue } from 'zod';
 import { logger } from '../lib/logger.js';
 
 export class HttpError extends Error {
@@ -11,6 +11,23 @@ export class HttpError extends Error {
     super(message);
     this.name = 'HttpError';
   }
+}
+
+/**
+ * Converts a Zod issue into user-appropriate text. Raw Zod internals
+ * ("Expected number, received null") never reach the UI: invalid-type issues
+ * become a friendly generic prompt, while custom business messages from the
+ * schemas (e.g. "Price must be greater than 0") are preserved.
+ */
+export function friendlyZodMessage(issues: ZodIssue[]): string {
+  const first = issues[0];
+  if (!first) {
+    return 'Please review the values you entered.';
+  }
+  if (first.code === 'invalid_type' || first.code === 'unrecognized_keys' || first.code === 'invalid_union') {
+    return 'Some values are missing or invalid — please review your input and try again.';
+  }
+  return first.message || 'Please review the values you entered.';
 }
 
 export function notFoundHandler(_req: Request, res: Response): void {
@@ -35,9 +52,10 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     return;
   }
 
-  // Safety net: any uncaught ZodError is a client-input problem, not a 500.
+  // Safety net: any uncaught ZodError is a client-input problem, never a 500 —
+  // and its message is always user-friendly, never raw Zod internals.
   if (err instanceof ZodError) {
-    res.status(400).json({ error: err.issues[0]?.message || 'Invalid request payload' });
+    res.status(400).json({ error: friendlyZodMessage(err.issues) });
     return;
   }
 

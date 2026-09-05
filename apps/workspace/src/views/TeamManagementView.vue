@@ -185,7 +185,7 @@ onMounted(() => {
             <DialogHeader>
               <DialogTitle>Invite New Team Member</DialogTitle>
               <DialogDescription>
-                Send an activation invitation to a colleague. They will receive an email via Mailhog to activate their account.
+                Send an activation invitation to a colleague. They will receive an email invitation to activate their account.
               </DialogDescription>
             </DialogHeader>
 
@@ -260,7 +260,7 @@ onMounted(() => {
           <div class="flex items-center justify-between">
             <div>
               <CardTitle class="text-lg font-semibold text-slate-900">Organization Members</CardTitle>
-              <CardDescription>Active and suspended users with access to this tenant workspace.</CardDescription>
+              <CardDescription>Active and suspended members of your organization.</CardDescription>
             </div>
             <Badge variant="secondary" class="font-semibold text-slate-700">
               {{ users.length }} Total Members

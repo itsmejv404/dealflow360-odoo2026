@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed } from 'vue';
 import { Badge } from '@/components/ui/badge';
 import { ShieldCheck, ShieldAlert, AlertOctagon, Info } from 'lucide-vue-next';
@@ -90,7 +90,7 @@ const badgeVariantClass = computed(() => {
     <!-- Progress / Meter -->
     <div class="space-y-1">
       <div class="flex items-center justify-between text-2xs">
-        <span class="text-muted-foreground font-medium">Blended Risk Exposure:</span>
+        <span class="text-muted-foreground font-medium">Risk Score:</span>
         <span class="font-bold text-xs">{{ Number(riskScore).toFixed(1) }} / 100</span>
       </div>
       <div class="h-2 w-full bg-muted/60 dark:bg-muted/30 rounded-full overflow-hidden">
@@ -101,9 +101,9 @@ const badgeVariantClass = computed(() => {
         ></div>
       </div>
       <div class="flex justify-between text-3xs text-muted-foreground pt-0.5">
-        <span>0 (Compliant)</span>
-        <span>20 (Mgr Gate)</span>
-        <span>50+ (Finance Gate)</span>
+        <span>Low</span>
+        <span>Medium</span>
+        <span>High</span>
       </div>
     </div>
 
@@ -116,7 +116,7 @@ const badgeVariantClass = computed(() => {
     <!-- Detailed line breaches if any -->
     <div v-if="overCeilingLineCount && overCeilingLineCount > 0" class="space-y-1.5 pt-1">
       <div class="text-3xs uppercase font-bold tracking-wider opacity-75">
-        Flagged Line Breaches ({{ overCeilingLineCount }}):
+        Lines Above Ceiling ({{ overCeilingLineCount }}):
       </div>
       <div class="space-y-1 max-h-28 overflow-y-auto pr-1">
         <div

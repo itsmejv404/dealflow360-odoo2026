@@ -1,4 +1,4 @@
-﻿import { prisma } from '../../lib/prisma.js';
+import { prisma } from '../../lib/prisma.js';
 import { governanceService } from './governance.service.js';
 
 async function runGovernanceIsolationCheck() {
@@ -18,13 +18,13 @@ async function runGovernanceIsolationCheck() {
 
   const tierBronzeA = await prisma.customerTier.upsert({
     where: { organizationId_code: { organizationId: orgA.id, code: 'bronze' } },
-    create: { organizationId: orgA.id, name: 'Bronze', code: 'bronze', defaultDiscountPercent: 0, rank: 1 },
+    create: { organizationId: orgA.id, name: 'Bronze', code: 'bronze', defaultDiscountPercent: 0 },
     update: {},
   });
 
   const tierGoldB = await prisma.customerTier.upsert({
     where: { organizationId_code: { organizationId: orgB.id, code: 'gold' } },
-    create: { organizationId: orgB.id, name: 'Gold', code: 'gold', defaultDiscountPercent: 10, rank: 3 },
+    create: { organizationId: orgB.id, name: 'Gold', code: 'gold', defaultDiscountPercent: 10 },
     update: {},
   });
 
@@ -182,7 +182,7 @@ async function runGovernanceIsolationCheck() {
     throw new Error('Org B should have auto-approved 15% discount within 20% ceiling');
   }
 
-  console.log('✔ All Phase 11 Governance & Isolation checks passed successfully!');
+  console.log('? All Phase 11 Governance & Isolation checks passed successfully!');
 }
 
 runGovernanceIsolationCheck()

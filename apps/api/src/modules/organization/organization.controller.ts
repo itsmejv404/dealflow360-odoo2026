@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 import { organizationService } from './organization.service.js';
 
 const updateProfileSchema = z.object({
@@ -35,7 +35,7 @@ export class OrganizationController {
       }
       const parsed = updateProfileSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new HttpError(400, `Validation error: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+        throw new HttpError(400, friendlyZodMessage(parsed.error.issues));
       }
       const updated = await organizationService.updateProfile(req.tenant.orgId, parsed.data);
       res.json({ data: updated });

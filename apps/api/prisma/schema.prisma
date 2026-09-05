@@ -121,7 +121,6 @@ model CustomerTier {
   code                   String   // "bronze", "silver", "gold", etc.
   description            String?
   defaultDiscountPercent Decimal  @default(0.00) @map("default_discount_percent") @db.Decimal(5, 2)
-  rank                   Int      @default(1)
   createdAt              DateTime @default(now()) @map("created_at")
   updatedAt              DateTime @updatedAt @map("updated_at")
 

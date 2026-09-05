@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Badge } from '@/components/ui/badge';
+import { roleLabel } from '@/lib/labels';
 import { 
   CheckCircle2, 
   XCircle, 
@@ -205,7 +206,7 @@ function getActionInfo(action: string) {
                 {{ getActionInfo(log.action).label }}
               </span>
               <Badge variant="outline" class="text-2xs py-0 uppercase">
-                {{ log.userRole || 'system' }}
+                {{ log.userRole ? roleLabel(log.userRole) : 'System' }}
               </Badge>
             </div>
             <span class="text-xs text-muted-foreground font-mono">
@@ -215,7 +216,7 @@ function getActionInfo(action: string) {
 
           <!-- Actor info -->
           <p class="text-xs text-muted-foreground">
-            By: <span class="font-medium text-foreground">{{ log.userEmail || 'System Process' }}</span>
+            By: <span class="font-medium text-foreground">{{ log.userEmail || 'System' }}</span>
           </p>
 
           <!-- Mandatory Reason note if present -->
@@ -233,7 +234,7 @@ function getActionInfo(action: string) {
               Score: <strong class="text-foreground">{{ log.metadata.riskScore }}/100</strong>
             </span>
             <span v-if="log.metadata.riskLevel">
-              Risk: <strong class="text-foreground uppercase">{{ log.metadata.riskLevel }}</strong>
+              Risk: <strong class="text-foreground capitalize">{{ log.metadata.riskLevel }}</strong>
             </span>
           </div>
         </div>

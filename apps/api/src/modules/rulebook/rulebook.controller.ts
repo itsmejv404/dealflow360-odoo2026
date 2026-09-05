@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { rulebookService } from './rulebook.service.js';
-import { HttpError } from '../../shared/errors.js';
+import { friendlyZodMessage, HttpError } from '../../shared/errors.js';
 
 const batchCeilingsSchema = z.object({
   ceilings: z.array(
@@ -34,7 +34,7 @@ export class RulebookController {
   private parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
     const result = schema.safeParse(body);
     if (!result.success) {
-      throw new HttpError(400, result.error.issues[0]?.message || 'Invalid request payload');
+      throw new HttpError(400, friendlyZodMessage(result.error.issues));
     }
     return result.data;
   }
