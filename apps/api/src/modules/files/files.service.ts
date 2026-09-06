@@ -10,6 +10,64 @@ import { logger } from '../../lib/logger.js';
 const M = PDF_PAGE.margin;
 const CONTENT_W = PDF_PAGE.width - M * 2;
 
+/**
+ * Extract the stored asset extension from an org logoUrl. logoUrl is an API
+ * route (e.g. "/api/organization/logo?ext=png&v=..."), not a MinIO key — the
+ * actual bytes live at "logo.<ext>" in the tenant bucket.
+ */
+function logoExtFromUrl(logoUrl: string): string | null {
+  const m = logoUrl.match(/[?&]ext=([a-z0-9]+)/i);
+  return m?.[1] ?? null;
+}
+
+function logoMimeForExt(ext: string): string {
+  switch (ext) {
+    case 'svg':
+      return 'image/svg+xml';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    default:
+      return 'image/png';
+  }
+}
+
+/**
+ * Load the org logo from tenant storage, resolving the "logo.<ext>" object key
+ * from the recorded logoUrl (with fallbacks). Returns raw bytes or null.
+ */
+async function loadLogoBuffer(orgId: string, logoUrl?: string | null): Promise<Buffer | null> {
+  if (!logoUrl) return null;
+  try {
+    if (logoUrl.startsWith('http://') || logoUrl.startsWith('https://')) {
+      const res = await fetch(logoUrl);
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      return buf.length > 0 ? buf : null;
+    }
+    const preferredExt = logoExtFromUrl(logoUrl);
+    const exts = [...new Set([preferredExt, 'png', 'svg', 'jpg', 'webp'].filter(Boolean))] as string[];
+    for (const ext of exts) {
+      try {
+        const stream = await storageService.getTenantFileStream(orgId, `logo.${ext}`);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream.body as unknown as AsyncIterable<Buffer>) {
+          chunks.push(Buffer.from(chunk));
+        }
+        const buf = Buffer.concat(chunks);
+        if (buf.length > 0) return buf;
+      } catch {
+        // Try next extension
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function money(n: unknown, currency: string): string {
   const num = Number(n || 0);
   return `${currency} ${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -65,20 +123,8 @@ export class FilesService {
   ): Promise<{ width: number; height: number; rgb: Buffer } | null> {
     if (!logoUrl) return null;
     try {
-      let buffer: Buffer;
-      if (logoUrl.startsWith('http://') || logoUrl.startsWith('https://')) {
-        const res = await fetch(logoUrl);
-        if (!res.ok) return null;
-        buffer = Buffer.from(await res.arrayBuffer());
-      } else {
-        const stream = await storageService.getTenantFileStream(orgId, logoUrl.replace(/^\//, ''));
-        const chunks: Buffer[] = [];
-        for await (const chunk of stream.body as unknown as AsyncIterable<Buffer>) {
-          chunks.push(Buffer.from(chunk));
-        }
-        buffer = Buffer.concat(chunks);
-      }
-      if (!buffer || buffer.length === 0) return null;
+      const buffer = await loadLogoBuffer(orgId, logoUrl);
+      if (!buffer) return null;
       return decodePng(buffer);
     } catch (err: any) {
       logger.warn({ orgId, logoUrl, err: err.message }, 'Could not load org logo for PDF; rendering without it');
@@ -90,25 +136,19 @@ export class FilesService {
    * Load the org logo as a base64 data URI for HTML/Gotenberg PDF rendering.
    */
   private async getLogoBase64(orgId: string, logoUrl?: string | null): Promise<string | null> {
-    if (!logoUrl) return null;
     try {
-      if (logoUrl.startsWith('http://') || logoUrl.startsWith('https://')) {
+      if (logoUrl && (logoUrl.startsWith('http://') || logoUrl.startsWith('https://'))) {
         const res = await fetch(logoUrl);
         if (!res.ok) return null;
         const mime = res.headers.get('content-type') || 'image/png';
         const buf = Buffer.from(await res.arrayBuffer());
         return `data:${mime};base64,${buf.toString('base64')}`;
-      } else {
-        const stream = await storageService.getTenantFileStream(orgId, logoUrl.replace(/^\//, ''));
-        const chunks: Buffer[] = [];
-        for await (const chunk of stream.body as unknown as AsyncIterable<Buffer>) {
-          chunks.push(Buffer.from(chunk));
-        }
-        const buf = Buffer.concat(chunks);
-        if (buf.length === 0) return null;
-        const mime = logoUrl.endsWith('.jpg') || logoUrl.endsWith('.jpeg') ? 'image/jpeg' : 'image/png';
-        return `data:${mime};base64,${buf.toString('base64')}`;
       }
+      const buf = await loadLogoBuffer(orgId, logoUrl);
+      if (!buf) return null;
+      const ext = logoExtFromUrl(logoUrl || '') || 'png';
+      const mime = logoMimeForExt(ext);
+      return `data:${mime};base64,${buf.toString('base64')}`;
     } catch {
       return null;
     }

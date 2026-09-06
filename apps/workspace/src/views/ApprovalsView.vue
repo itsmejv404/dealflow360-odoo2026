@@ -24,9 +24,10 @@ import {
 import { apiRequest } from '@/lib/api';
 import { formatCurrency, marginTone } from '@/lib/currency';
 import { getSocket } from '@/lib/socket';
-import RiskScoreBadge from '@/components/quotations/RiskScoreBadge.vue';
 import {
   ShieldAlert,
+  AlertOctagon,
+  ShieldCheck,
   CheckCircle2,
   XCircle,
   Clock,
@@ -61,6 +62,23 @@ async function fetchPendingApprovals() {
     loading.value = false;
   }
 }
+
+
+const riskIcon = (level: string) =>
+  level === 'high' ? AlertOctagon : level === 'medium' ? ShieldAlert : ShieldCheck;
+
+const riskBadgeClass = (level: string) =>
+  level === 'high'
+    ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-900'
+    : level === 'medium'
+    ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900'
+    : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900';
+
+const riskMeterClass = (level: string) =>
+  level === 'high' ? 'bg-red-500' : level === 'medium' ? 'bg-amber-500' : 'bg-emerald-500';
+
+const riskTextClass = (level: string) =>
+  level === 'high' ? 'text-red-600 dark:text-red-400' : level === 'medium' ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400';
 
 function openActionModal(request: any, type: 'approve' | 'reject') {
   selectedRequest.value = request;
@@ -213,12 +231,15 @@ onUnmounted(() => {
                 >
                   {{ req.stage === 'finance' ? 'Finance Escalation' : 'Manager Review' }}
                 </Badge>
-                <RiskScoreBadge
+                <Badge
                   v-if="req.quotation?.riskScore !== undefined"
-                  :risk-score="Number(req.quotation.riskScore)"
-                  :risk-level="req.quotation.riskLevel"
-                  :approval-routing="req.quotation.approvalRouting"
-                />
+                  variant="outline"
+                  class="text-xs font-semibold gap-1"
+                  :class="riskBadgeClass(req.quotation.riskLevel)"
+                >
+                  <component :is="riskIcon(req.quotation.riskLevel)" class="w-3.5 h-3.5" />
+                  Risk {{ Number(req.quotation.riskScore).toFixed(0) }}/100
+                </Badge>
               </div>
 
               <div class="text-xs text-muted-foreground flex items-center gap-1 font-mono">
@@ -241,6 +262,23 @@ onUnmounted(() => {
                   <p class="text-muted-foreground mt-0.5">{{ req.reason || 'Discount rules require a review before approval.' }}</p>
                 </div>
               </div>
+            </div>
+
+            <div
+              v-if="req.quotation?.riskScore !== undefined"
+              class="flex items-center gap-3 text-xs -mt-1 px-1"
+            >
+              <span class="text-muted-foreground shrink-0 font-medium">Discount Risk</span>
+              <div class="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+                <div
+                  class="h-full rounded-full transition-all duration-300"
+                  :class="riskMeterClass(req.quotation.riskLevel)"
+                  :style="{ width: Math.min(100, Math.max(0, Number(req.quotation.riskScore))) + '%' }"
+                ></div>
+              </div>
+              <span class="font-mono font-semibold shrink-0" :class="riskTextClass(req.quotation.riskLevel)">
+                {{ Number(req.quotation.riskScore).toFixed(1) }}/100 · {{ req.quotation.riskLevel }}
+              </span>
             </div>
 
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded-lg bg-card border text-center text-xs">

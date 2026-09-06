@@ -101,27 +101,30 @@ interface BackorderRecord {
   quotationLineId: string;
   productId: string;
   quantity: number;
-  fulfilledQuantity: number;
-  remainingQuantity: number;
-  status: 'pending' | 'partially_fulfilled' | 'fulfilled' | 'cancelled';
+  fulfilledQty: number;
+  pendingQty: number;
+  productName: string;
+  sku: string;
+  quotationNumber: string;
+  customerName?: string;
+  status: 'pending' | 'partially_consolidated' | 'consolidated' | 'cancelled';
   createdAt: string;
-  updatedAt: string;
-  product?: { id: string; name: string; sku: string };
-  quotation?: { id: string; quotationNumber: string; customer?: { name: string; company?: string } };
 }
 
 interface ConsolidationPromptRecord {
   id: string;
-  planId: string;
+  quotationId: string;
+  quotationNumber: string;
+  customerName?: string;
   warehouseId: string;
+  warehouseName: string;
+  warehouseCode: string;
   productId: string;
-  proposedQuantity: number;
-  availableStock: number;
-  status: 'pending' | 'applied' | 'dismissed';
+  productName: string;
+  sku: string;
+  suggestedQty: number;
+  status: 'pending' | 'consolidated' | 'dismissed';
   createdAt: string;
-  product?: { id: string; name: string; sku: string };
-  warehouse?: { id: string; name: string; code: string };
-  quotation?: { id: string; quotationNumber: string };
 }
 
 const activeTab = ref<'warehouses' | 'stock' | 'backorders' | 'shipping'>('warehouses');
@@ -227,7 +230,7 @@ async function handleConsolidatePrompt(prompt: ConsolidationPromptRecord) {
       method: 'POST',
       body: '{}',
     });
-    successMessage.value = `Backorder consolidated for quotation #${prompt.quotation?.quotationNumber || ''}! Stock deducted from ${prompt.warehouse?.name || 'warehouse'}.`;
+    successMessage.value = `Backorder consolidated for quotation #${prompt.quotationNumber}! Stock deducted from ${prompt.warehouseName}.`;
     await Promise.all([loadBackordersAndPrompts(), loadStock()]);
     setTimeout(() => {
       if (successMessage.value?.startsWith('Backorder consolidated')) {
@@ -293,7 +296,6 @@ async function loadAll() {
     stockMatrix.value = stockRes;
     shippingRules.value = { ...shippingRules.value, ...rulesRes.rules };
     await Promise.all([loadBackordersAndPrompts()]);
-    loadShippingOverrides();
   } catch (err: any) {
     actionError.value = err.message || 'Failed to load warehouses and inventory';
   } finally {
@@ -474,89 +476,6 @@ async function saveShippingRules() {
   } finally {
     isSaving.value = false;
   }
-}
-
-// ---- Shipping rules ----
-const shippingScope = ref<'org' | 'customer' | 'warehouse'>('org');
-const shippingScopeTargetId = ref<string>('');
-const shippingOverrides = ref<any[]>([]);
-const shippingCustomers = ref<Array<{ id: string; name: string; email: string }>>([]);
-const shippingWarehousesList = ref<Array<{ id: string; name: string; code: string }>>([]);
-const canManageOverrides = computed(() =>
-  ['org_admin', 'manager', 'finance'].includes(authStore.state.user?.role || '')
-);
-
-async function loadShippingOverrides() {
-  try {
-    const data = await apiRequest<{
-      overrides: any[];
-      customers: Array<{ id: string; name: string; email: string }>;
-      warehouses: Array<{ id: string; name: string; code: string }>;
-    }>('/api/warehouses/shipping-rules/overrides');
-    shippingOverrides.value = data.overrides || [];
-    shippingCustomers.value = data.customers || [];
-    shippingWarehousesList.value = data.warehouses || [];
-  } catch {
-    // Overrides listing is non-fatal
-  }
-}
-
-function scopeTargetOptions(): Array<{ id: string; name: string; code?: string }> {
-  return shippingScope.value === 'customer'
-    ? shippingCustomers.value.map((c) => ({ id: c.id, name: c.name }))
-    : shippingWarehousesList.value;
-}
-
-async function saveScopedShippingRules() {
-  if (!shippingScopeTargetId.value) {
-    actionError.value = 'Select a customer or warehouse for the override.';
-    return;
-  }
-  isSaving.value = true;
-  actionError.value = null;
-  try {
-    await apiRequest('/api/warehouses/shipping-rules/overrides', {
-      method: 'PUT',
-      data: {
-        ...(shippingScope.value === 'customer'
-          ? { customerId: shippingScopeTargetId.value }
-          : { warehouseId: shippingScopeTargetId.value }),
-        allowSplitShipments: shippingRules.value.allowSplitShipments,
-        chargeForSplitShipments: shippingRules.value.chargeForSplitShipments,
-        deliveryExtensionDays: shippingRules.value.deliveryExtensionDays,
-        notes: shippingRules.value.notes || null,
-      },
-    });
-    successMessage.value =
-      shippingScope.value === 'customer'
-        ? 'Customer shipping rule override saved.'
-        : 'Warehouse shipping rule override saved.';
-    await loadShippingOverrides();
-  } catch (err: any) {
-    actionError.value = err.message || 'Failed to save the shipping rule override';
-  } finally {
-    isSaving.value = false;
-  }
-}
-
-async function deleteShippingOverride(id: string) {
-  if (!window.confirm('Remove this shipping rule override? The default rules will apply again.')) return;
-  try {
-    await apiRequest(`/api/warehouses/shipping-rules/overrides/${id}`, { method: 'DELETE' });
-    successMessage.value = 'Override removed — default rules apply again.';
-    await loadShippingOverrides();
-  } catch (err: any) {
-    actionError.value = err.message || 'Failed to remove the override';
-  }
-}
-
-function overrideTargetLabel(o: any): string {
-  if (o.customerId) {
-    const c = shippingCustomers.value.find((x) => x.id === o.customerId);
-    return `Customer: ${c?.name || o.customerId}`;
-  }
-  const w = shippingWarehousesList.value.find((x) => x.id === o.warehouseId);
-  return `Warehouse: ${w?.name || o.warehouseId}`;
 }
 
 // ---- Realtime inventory updates from other actors ----
@@ -1017,22 +936,22 @@ onUnmounted(() => {
                   <div>
                     <div class="flex items-center gap-1.5">
                       <span class="font-bold text-xs text-blue-700 dark:text-blue-300">
-                        Quote #{{ prompt.quotation?.quotationNumber || 'Unknown' }}
+                        Quote #{{ prompt.quotationNumber }}
                       </span>
                       <Badge variant="outline" class="text-2xs bg-blue-500/10 text-blue-600 border-blue-300">
                         Consolidation Prompt
                       </Badge>
                     </div>
                     <div class="text-xs font-semibold text-foreground mt-1">
-                      {{ prompt.product?.name || 'Product' }}
-                      <span class="text-2xs font-mono text-muted-foreground ml-1">({{ prompt.product?.sku }})</span>
+                      {{ prompt.productName }}
+                      <span class="text-2xs font-mono text-muted-foreground ml-1">({{ prompt.sku }})</span>
                     </div>
                   </div>
                   <Button
                     variant="ghost"
                     size="sm"
                     class="h-7 text-2xs"
-                    @click="router.push(`/quotations/${prompt.planId ? prompt.quotation?.id || '' : ''}`)"
+                    @click="router.push(`/quotations/${prompt.quotationId}`)"
                   >
                     View Quote
                     <ArrowUpRight class="w-3 h-3 ml-0.5" />
@@ -1042,15 +961,11 @@ onUnmounted(() => {
                 <div class="p-2.5 rounded-md bg-background/80 border border-border/60 text-xs space-y-1">
                   <div class="flex items-center justify-between">
                     <span class="text-muted-foreground">Warehouse:</span>
-                    <span class="font-semibold text-foreground">{{ prompt.warehouse?.name }} ({{ prompt.warehouse?.code }})</span>
-                  </div>
-                  <div class="flex items-center justify-between">
-                    <span class="text-muted-foreground">Stock Available:</span>
-                    <span class="font-semibold text-emerald-600 dark:text-emerald-400">{{ prompt.availableStock }} units</span>
+                    <span class="font-semibold text-foreground">{{ prompt.warehouseName }} ({{ prompt.warehouseCode }})</span>
                   </div>
                   <div class="flex items-center justify-between">
                     <span class="text-muted-foreground">Proposed Consolidation:</span>
-                    <span class="font-bold text-blue-600 dark:text-blue-400">{{ prompt.proposedQuantity }} unit(s)</span>
+                    <span class="font-bold text-blue-600 dark:text-blue-400">{{ prompt.suggestedQty }} unit(s)</span>
                   </div>
                 </div>
 
@@ -1140,37 +1055,36 @@ onUnmounted(() => {
                   <TableRow v-for="bo in backorders" :key="bo.id" class="hover:bg-muted/20">
                     <TableCell>
                       <div class="text-xs font-semibold text-foreground">
-                        #{{ bo.quotation?.quotationNumber || 'Quote' }}
+                        #{{ bo.quotationNumber }}
                       </div>
                       <div class="text-2xs text-muted-foreground">
-                        {{ bo.quotation?.customer?.name || 'Customer' }}
+                        {{ bo.customerName || 'Customer' }}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div class="text-xs font-semibold text-foreground">{{ bo.product?.name || 'Product' }}</div>
-                      <div class="text-2xs text-muted-foreground font-mono">{{ bo.product?.sku }}</div>
+                    <div class="text-xs font-semibold text-foreground">{{ bo.productName }}</div>
+                    <div class="text-2xs text-muted-foreground font-mono">{{ bo.sku }}</div>
                     </TableCell>
                     <TableCell class="text-center text-xs font-mono font-medium">
                       {{ bo.quantity }}
                     </TableCell>
                     <TableCell class="text-center text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                      {{ bo.fulfilledQuantity }}
+                      {{ bo.fulfilledQty }}
                     </TableCell>
                     <TableCell
                       class="text-center text-xs font-mono font-bold"
-                      :class="bo.remainingQuantity > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
+                      :class="bo.pendingQty > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
                     >
-                      {{ bo.remainingQuantity }}
+                      {{ bo.pendingQty }}
                     </TableCell>
                     <TableCell class="text-center">
                       <Badge
                         variant="outline"
-                        class="text-2xs uppercase"
-                        :class="bo.status === 'fulfilled'
-                          ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300'
-                          : bo.status === 'partially_fulfilled'
-                            ? 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300'
-                            : 'bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300'"
+                        class="text-2xs uppercase"                            :class="bo.status === 'consolidated'
+                              ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300'
+                              : bo.status === 'partially_consolidated'
+                                ? 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300'
+                                : 'bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300'"
                       >
                         {{ bo.status.replace('_', ' ') }}
                       </Badge>
@@ -1284,79 +1198,6 @@ onUnmounted(() => {
           </CardContent>
         </Card>
 
-        <!-- Scoped overrides: per-customer / per-warehouse shipping rules -->
-        <Card class="border-border bg-card shadow-xs">
-          <CardHeader class="pb-3 border-b border-border/70">
-            <CardTitle class="text-sm font-semibold text-foreground flex items-center gap-2">
-              <Truck class="w-4 h-4 text-primary" />
-              Rule Overrides
-            </CardTitle>
-            <CardDescription class="text-xs">
-              Shipping rules can differ per customer and per warehouse. Overrides take priority over
-              the organization defaults above; split-warehouse shipments resolve rules per warehouse.
-            </CardDescription>
-          </CardHeader>
-          <CardContent class="pt-4 space-y-4" v-if="canManageOverrides">
-            <div class="flex flex-col sm:flex-row sm:items-end gap-3">
-              <div class="grid gap-1.5">
-                <Label class="text-xs font-semibold">Scope</Label>
-                <select
-                  v-model="shippingScope"
-                  class="h-9 text-xs bg-background border border-border rounded-md px-2 text-foreground"
-                >
-                  <option value="customer">Per Customer</option>
-                  <option value="warehouse">Per Warehouse</option>
-                </select>
-              </div>
-              <div class="grid gap-1.5 flex-1">
-                <Label class="text-xs font-semibold">
-                  {{ shippingScope === 'customer' ? 'Customer' : 'Warehouse' }}
-                </Label>
-                <select
-                  v-model="shippingScopeTargetId"
-                  class="h-9 text-xs bg-background border border-border rounded-md px-2 text-foreground"
-                >
-                  <option value="" disabled>Select…</option>
-                  <option v-for="opt in scopeTargetOptions()" :key="opt.id" :value="opt.id">
-                    {{ shippingScope === 'customer' ? opt.name : `${opt.name} (${opt.code})` }}
-                  </option>
-                </select>
-              </div>
-              <Button size="sm" :disabled="isSaving" @click="saveScopedShippingRules">
-                <Save class="w-3.5 h-3.5 mr-1.5" />
-                Save Override
-              </Button>
-            </div>
-
-            <div v-if="shippingOverrides.length > 0" class="space-y-2">
-              <div
-                v-for="o in shippingOverrides"
-                :key="o.id"
-                class="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-3 py-2"
-              >
-                <div class="text-xs">
-                  <span class="font-semibold text-foreground">{{ overrideTargetLabel(o) }}</span>
-                  <span class="text-muted-foreground">
-                    — {{ o.allowSplitShipments ? 'split allowed' : 'no splits' }},
-                    {{ o.chargeForSplitShipments ? 'extra charge' : 'no extra charge' }},
-                    +{{ o.deliveryExtensionDays }}d delivery
-                  </span>
-                </div>
-                <Button variant="ghost" size="sm" class="h-7 text-2xs" @click="deleteShippingOverride(o.id)">
-                  Remove
-                </Button>
-              </div>
-            </div>
-            <p v-else class="text-2xs text-muted-foreground">
-              No overrides yet — all customers and warehouses use the organization defaults.
-            </p>
-          </CardContent>
-          <CardContent v-else class="pt-4">
-            <p class="text-2xs text-muted-foreground">
-              Only Org Admins, Managers, and Finance can manage shipping rule overrides.
-            </p>
-          </CardContent>
-        </Card>
       </TabsContent>
     </Tabs>
 

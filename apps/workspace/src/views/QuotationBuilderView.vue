@@ -1087,25 +1087,25 @@ interface BackorderView {
   productName: string;
   sku: string;
   quantity: number;
-  fulfilledQuantity: number;
-  remainingQuantity: number;
-  status: 'pending' | 'partially_fulfilled' | 'fulfilled' | 'cancelled';
+  fulfilledQty: number;
+  pendingQty: number;
+  status: 'pending' | 'partially_consolidated' | 'consolidated' | 'cancelled';
   createdAt: string;
-  updatedAt: string;
 }
 
 interface ConsolidationPromptView {
   id: string;
-  planId: string;
+  quotationId: string;
+  quotationNumber: string;
+  customerName?: string;
   warehouseId: string;
   warehouseName: string;
   warehouseCode: string;
   productId: string;
   productName: string;
   sku: string;
-  proposedQuantity: number;
-  availableStock: number;
-  status: 'pending' | 'applied' | 'dismissed';
+  suggestedQty: number;
+  status: 'pending' | 'consolidated' | 'dismissed';
   createdAt: string;
 }
 
@@ -1144,7 +1144,7 @@ const activePrompts = computed(() =>
 );
 
 const pendingBackorders = computed(() =>
-  fulfillmentPlan.value?.backorders?.filter((b) => b.status === 'pending' || b.status === 'partially_fulfilled') ?? []
+  fulfillmentPlan.value?.backorders?.filter((b) => b.status === 'pending' || b.status === 'partially_consolidated') ?? []
 );
 
 const allBackorders = computed(() =>
@@ -1293,7 +1293,7 @@ async function handleConsolidate(prompt: ConsolidationPromptView) {
       `/api/fulfillment/prompts/${prompt.id}/consolidate`,
       { method: 'POST', body: '{}' }
     );
-    fulfillmentNotice.value = `Backorder consolidated! ${prompt.proposedQuantity} unit(s) allocated from ${prompt.warehouseName}.`;
+    fulfillmentNotice.value = `Backorder consolidated! ${prompt.suggestedQty} unit(s) allocated from ${prompt.warehouseName}.`;
     await loadFulfillment();
     if (quoteId.value) {
       await loadAuditTrail(quoteId.value);
@@ -2155,7 +2155,7 @@ onUnmounted(() => {
                         Warehouse <span class="font-semibold text-foreground">{{ prompt.warehouseName }}</span> ({{ prompt.warehouseCode }}) received stock for
                         <span class="font-semibold text-foreground">{{ prompt.productName }}</span>.
                         <br />
-                        Can fulfill <span class="font-bold text-foreground">{{ prompt.proposedQuantity }} backordered unit(s)</span> immediately ({{ prompt.availableStock }} in stock).
+                        Can fulfill <span class="font-bold text-foreground">{{ prompt.suggestedQty }} backordered unit(s)</span> immediately.
                       </p>
                     </div>
                   </div>
@@ -2313,18 +2313,18 @@ onUnmounted(() => {
                           </TableCell>
                           <TableCell class="text-center font-mono">{{ bo.quantity }}</TableCell>
                           <TableCell class="text-center font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
-                            {{ bo.fulfilledQuantity }}
+                            {{ bo.fulfilledQty }}
                           </TableCell>
-                          <TableCell class="text-center font-mono font-bold" :class="bo.remainingQuantity > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'">
-                            {{ bo.remainingQuantity }}
+                          <TableCell class="text-center font-mono font-bold" :class="bo.pendingQty > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'">
+                            {{ bo.pendingQty }}
                           </TableCell>
                           <TableCell class="text-center">
                             <Badge
                               variant="outline"
                               class="text-2xs uppercase"
-                              :class="bo.status === 'fulfilled'
+                              :class="bo.status === 'consolidated'
                                 ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-300'
-                                : bo.status === 'partially_fulfilled'
+                                : bo.status === 'partially_consolidated'
                                   ? 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-300'
                                   : 'bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-300'"
                             >

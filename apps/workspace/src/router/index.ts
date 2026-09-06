@@ -17,6 +17,7 @@ import BillingView from '../views/BillingView.vue';
 import DealHealthView from '../views/DealHealthView.vue';
 import ProfileView from '../views/ProfileView.vue';
 import ForgotPasswordView from '../views/ForgotPasswordView.vue';
+import LandingView from '../views/LandingView.vue';
 import ResetPasswordView from '../views/ResetPasswordView.vue';
 import { authStore } from '../lib/auth';
 
@@ -63,7 +64,13 @@ export const router = createRouter({
       component: OnboardingView,
       meta: { requiresAdmin: true },
     },
-    { path: '/', name: 'dashboard', component: DashboardView },
+    {
+      path: '/',
+      name: 'landing',
+      component: LandingView,
+      meta: { isPublic: true },
+    },
+    { path: '/dashboard', name: 'dashboard', component: DashboardView },
     {
       path: '/catalog',
       name: 'catalog',
@@ -148,6 +155,14 @@ router.beforeEach((to, _from, next) => {
   const publicPaths = ['/login', '/activate', '/superadmin/login', '/platform/login'];
   const cleanPath = to.path.replace(/\/$/, '') || '/';
   
+  // Authenticated users skip the marketing landing page and go straight to their app. Checked before the isPublic short-circuit: "/" is public only for signed-out visitors.
+  if (cleanPath === '/' && authStore.isAuthenticated()) {
+    if (authStore.state.user?.role === 'super_admin') {
+      return next({ name: 'platform-portal' });
+    }
+    return next({ name: 'dashboard' });
+  }
+
   const isPublic =
     !!to.meta.isPublic ||
     publicNames.includes(to.name as string) ||
