@@ -49,10 +49,17 @@ export async function generateOrgInvoiceNumber(tx: Prisma.TransactionClient, org
   const year = new Date().getFullYear();
   const prefix = `${orgSlug.toUpperCase().replace(/[^A-Z0-9]/g, '')}-INV-${year}`;
 
-  const count = await tx.invoice.count({
-    where: { organizationId: orgId },
+  // Max on the numeric suffix (not count) so voided/deleted invoices never
+  // cause a collision — count-based numbering regresses when rows are removed.
+  const invoices = await tx.invoice.findMany({
+    where: { organizationId: orgId, invoiceNumber: { startsWith: `${prefix}-` } },
+    orderBy: { invoiceNumber: 'desc' },
+    take: 1,
+    select: { invoiceNumber: true },
   });
-  const seq = String(count + 1).padStart(4, '0');
+  const lastSeq = invoices[0]?.invoiceNumber?.split('-').pop();
+  const next = lastSeq && /^\d+$/.test(lastSeq) ? parseInt(lastSeq, 10) + 1 : 1;
+  const seq = String(next).padStart(4, '0');
   return `${prefix}-${seq}`;
 }
 

@@ -1309,6 +1309,189 @@ export async function seedAll() {
 
   console.log('✔ Finished seeding JSW Industrial Solutions with 6 realistic transaction flows');
 
+  // =========================================================================
+  // 6. DEAL HEALTH MONITORING ALERTS
+  // Populates the Deal Health dashboard so stalled-quote, discount-anomaly and
+  // delivery-slippage signals are visible immediately after seeding (mirrors
+  // the alerts the periodic scan worker would raise, with realistic
+  // back-dated timestamps).
+  // =========================================================================
+  console.log('\n--- Seeding Deal Health Monitoring alerts ---');
+  const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+
+  // --- Dell Technologies India ---
+  // Stalled quote: Razorpay sent quote untouched for 9 days (high: > 2x threshold)
+  const dellRazorpayQuote = await prisma.quotation.findFirst({
+    where: { organizationId: dell.id, customer: { name: { contains: 'Razorpay' } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (dellRazorpayQuote) {
+    await prisma.quotation.update({
+      where: { id: dellRazorpayQuote.id },
+      data: { updatedAt: daysAgo(9) },
+    });
+    await prisma.dealHealthAlert.create({
+      data: {
+        organizationId: dell.id,
+        quotationId: dellRazorpayQuote.id,
+        repId: seededDellUsers.rep.id,
+        alertType: 'stalled_quote',
+        severity: 'high',
+        title: 'Quotation ' + dellRazorpayQuote.quotationNumber + ' stalled for 9 days',
+        detail: 'Quote for customer "Razorpay" (sent) has had no activity for 9 days. Follow up before it loses momentum.',
+        status: 'open',
+        metadata: { inactiveDays: 9, status: 'sent' },
+        createdAt: daysAgo(1),
+      },
+    });
+  }
+
+  // Stalled quote: HDFC negotiation inactive for 5 days (medium), already nudged
+  const dellHdfcQuote = await prisma.quotation.findFirst({
+    where: { organizationId: dell.id, customer: { name: { contains: 'HDFC' } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (dellHdfcQuote) {
+    await prisma.quotation.update({
+      where: { id: dellHdfcQuote.id },
+      data: { updatedAt: daysAgo(5) },
+    });
+    await prisma.dealHealthAlert.create({
+      data: {
+        organizationId: dell.id,
+        quotationId: dellHdfcQuote.id,
+        repId: seededDellUsers.rep.id,
+        alertType: 'stalled_quote',
+        severity: 'medium',
+        title: 'Quotation ' + dellHdfcQuote.quotationNumber + ' stalled for 5 days',
+        detail: 'Quote for customer "HDFC Bank" (negotiating) has had no activity for 5 days - the customer counter-proposal is awaiting a response.',
+        status: 'nudged',
+        nudgedAt: daysAgo(2),
+        metadata: { inactiveDays: 5, status: 'negotiating' },
+        createdAt: daysAgo(3),
+      },
+    });
+  }
+
+  // Discount anomaly: Flipkart deal 22% vs rep's historical ~3.2% average (escalated to Finance)
+  await prisma.dealHealthAlert.create({
+    data: {
+      organizationId: dell.id,
+      quotationId: dellQ4.id,
+      repId: seededDellUsers.rep.id,
+      alertType: 'discount_anomaly',
+      severity: 'high',
+      title: 'Discount anomaly on ' + dellQ4.quotationNumber + ' (22.0% vs 3.2% avg)',
+      detail: 'Rep Rohan Mehta is discounting at 22.0% on quotation ' + dellQ4.quotationNumber + ', which is 6.9x their own historical average of 3.2%.',
+      status: 'escalated',
+      escalatedAt: daysAgo(1),
+      metadata: { currentDiscountPercent: 22.0, historicalAveragePercent: 3.2, multiplier: 2.5 },
+      createdAt: daysAgo(2),
+    },
+  });
+
+  // Delivery slippage: Zerodha fulfillment plan proposed 4 days ago, still unaccepted
+  await prisma.fulfillmentPlan.update({
+    where: { id: planQ3.id },
+    data: { proposedAt: daysAgo(4) },
+  });
+  await prisma.dealHealthAlert.create({
+    data: {
+      organizationId: dell.id,
+      quotationId: dellQ3.id,
+      alertType: 'delivery_slippage',
+      severity: 'medium',
+      title: 'Fulfillment plan pending Ops acceptance for 4 days',
+      detail: 'Quotation ' + dellQ3.quotationNumber + ' has an unaccepted fulfillment split proposed 4 days ago - delivery is slipping.',
+      status: 'open',
+      metadata: { planId: planQ3.id, daysWaiting: 4 },
+      createdAt: daysAgo(1),
+    },
+  });
+
+  // Resolved example: earlier stalled TCS quote that the rep revived
+  await prisma.dealHealthAlert.create({
+    data: {
+      organizationId: dell.id,
+      quotationId: dellQ2.id,
+      repId: seededDellUsers.rep.id,
+      alertType: 'stalled_quote',
+      severity: 'low',
+      title: 'Quotation ' + dellQ2.quotationNumber + ' stalled for 4 days',
+      detail: 'Historical alert - quote was followed up and confirmed the same week.',
+      status: 'resolved',
+      resolvedAt: daysAgo(6),
+      metadata: { inactiveDays: 4 },
+      createdAt: daysAgo(10),
+    },
+  });
+
+  // --- JSW Industrial Solutions ---
+  // Stalled quote: Thermax sent quote untouched for 7 days
+  const jswThermaxQuote = await prisma.quotation.findFirst({
+    where: { organizationId: jsw.id, customer: { name: { contains: 'Thermax' } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (jswThermaxQuote) {
+    await prisma.quotation.update({
+      where: { id: jswThermaxQuote.id },
+      data: { updatedAt: daysAgo(7) },
+    });
+    await prisma.dealHealthAlert.create({
+      data: {
+        organizationId: jsw.id,
+        quotationId: jswThermaxQuote.id,
+        repId: seededJswUsers.rep.id,
+        alertType: 'stalled_quote',
+        severity: 'high',
+        title: 'Quotation ' + jswThermaxQuote.quotationNumber + ' stalled for 7 days',
+        detail: 'Quote for customer "Thermax" (sent) has had no activity for 7 days.',
+        status: 'open',
+        metadata: { inactiveDays: 7, status: 'sent' },
+        createdAt: daysAgo(1),
+      },
+    });
+  }
+
+  // Discount anomaly: Adani 20% order discount vs JSW rep's historical 4.5% average
+  await prisma.dealHealthAlert.create({
+    data: {
+      organizationId: jsw.id,
+      quotationId: jswQ4.id,
+      repId: seededJswUsers.rep.id,
+      alertType: 'discount_anomaly',
+      severity: 'high',
+      title: 'Discount anomaly on ' + jswQ4.quotationNumber + ' (20.0% vs 4.5% avg)',
+      detail: 'Rep Kavita Iyer is discounting at 20.0% on quotation ' + jswQ4.quotationNumber + ', which is 4.4x their own historical average of 4.5%.',
+      status: 'open',
+      metadata: { currentDiscountPercent: 20.0, historicalAveragePercent: 4.5, multiplier: 2.5 },
+      createdAt: daysAgo(1),
+    },
+  });
+
+  // Delivery slippage: generator fleet plan stuck unaccepted for 5 days (escalated)
+  await prisma.fulfillmentPlan.update({
+    where: { id: jswPlanQ3.id },
+    data: { proposedAt: daysAgo(5) },
+  });
+  await prisma.dealHealthAlert.create({
+    data: {
+      organizationId: jsw.id,
+      quotationId: jswQ3.id,
+      alertType: 'delivery_slippage',
+      severity: 'high',
+      title: 'Fulfillment plan pending Ops acceptance for 5 days',
+      detail: 'Quotation ' + jswQ3.quotationNumber + ' has an unaccepted fulfillment split proposed 5 days ago - delivery is slipping.',
+      status: 'escalated',
+      escalatedAt: daysAgo(1),
+      metadata: { planId: jswPlanQ3.id, daysWaiting: 5 },
+      createdAt: daysAgo(2),
+    },
+  });
+
+  console.log('✔ Seeded Deal Health alerts for both organizations');
+
+
   console.log('\n========================================');
   console.log('🎉 DATABASE SEEDING COMPLETED SUCCESSFULLY (INR / IST)');
   console.log('========================================\n');
