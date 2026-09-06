@@ -43,6 +43,7 @@
     "multer": "^2.3.0",
     "nodemailer": "^10.0.0",
     "pino": "^9.6.0",
+    "puppeteer": "^25.10.0",
     "rate-limit-redis": "^4.3.1",
     "socket.io": "^4.8.3",
     "zod": "^3.24.2"

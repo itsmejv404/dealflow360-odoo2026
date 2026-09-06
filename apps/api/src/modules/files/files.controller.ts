@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
+import { Readable } from 'node:stream';
 import { filesService } from './files.service.js';
+import { storageService } from '../../lib/storage.js';
 
 export class FilesController {
   async quotationPdf(req: Request, res: Response, next: NextFunction) {
@@ -12,6 +14,37 @@ export class FilesController {
         isCustomer,
         customerQuotationIds: req.tenant!.quotationIds,
       });
+
+      if (req.query.download === 'true') {
+        const fileStream = await storageService.getTenantFileStream(orgId, data.key);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${data.fileName}"`);
+        if (fileStream.body && typeof (fileStream.body as any).pipe === 'function') {
+          (fileStream.body as Readable).pipe(res);
+        } else {
+          res.json({ success: true, data });
+        }
+        return;
+      }
+
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async quotationLogsTxt(req: Request, res: Response, next: NextFunction) {
+    try {
+      const orgId = req.tenant!.orgId;
+      const quotationId = req.params.id!;
+      const data = await filesService.getQuotationLogsTxt(orgId, quotationId);
+
+      if (req.query.download === 'true') {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${data.fileName}"`);
+        res.send(data.content);
+        return;
+      }
       res.json({ success: true, data });
     } catch (err) {
       next(err);
@@ -22,6 +55,19 @@ export class FilesController {
     try {
       const orgId = req.tenant!.orgId;
       const data = await filesService.getInvoicePdf(orgId, req.params.id!);
+
+      if (req.query.download === 'true') {
+        const fileStream = await storageService.getTenantFileStream(orgId, data.key);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${data.fileName}"`);
+        if (fileStream.body && typeof (fileStream.body as any).pipe === 'function') {
+          (fileStream.body as Readable).pipe(res);
+        } else {
+          res.json({ success: true, data });
+        }
+        return;
+      }
+
       res.json({ success: true, data });
     } catch (err) {
       next(err);

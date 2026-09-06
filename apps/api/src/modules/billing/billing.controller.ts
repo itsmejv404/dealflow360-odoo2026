@@ -289,6 +289,29 @@ export class BillingController {
       next(err);
     }
   }
+
+  /** Export sales activities in CSV */
+  async exportSalesActivitiesCsv(req: Request, res: Response, next: NextFunction) {
+    try {
+      const orgId = req.tenant!.orgId;
+      const { startDate, endDate, type } = req.query;
+      const data = await billingService.exportSalesActivitiesCsv(orgId, {
+        startDate: startDate as string | undefined,
+        endDate: endDate as string | undefined,
+        type: type as string | undefined,
+      });
+
+      if (req.query.download === 'true') {
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${data.fileName}"`);
+        res.send(data.content);
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const billingController = new BillingController();

@@ -34,6 +34,14 @@ billingRouter.get('/invoices', (req, res, next) =>
   billingController.listInvoices(req, res, next)
 );
 
+// Sales Activities Export in CSV format
+billingRouter.get('/export/sales-activities/csv', (req, res, next) =>
+  billingController.exportSalesActivitiesCsv(req, res, next)
+);
+billingRouter.get('/sales-activities/export/csv', (req, res, next) =>
+  billingController.exportSalesActivitiesCsv(req, res, next)
+);
+
 billingRouter.get('/invoices/:id', (req, res, next) =>
   billingController.getInvoice(req, res, next)
 );

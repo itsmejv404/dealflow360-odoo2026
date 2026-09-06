@@ -9,6 +9,8 @@ warehousesRouter.use(tenantContextMiddleware);
 
 // Reads are open to every internal role — Ops works from these screens.
 warehousesRouter.get('/', (req, res, next) => warehousesController.listWarehouses(req, res, next));
+warehousesRouter.get('/export/csv', (req, res, next) => warehousesController.exportStockCsv(req, res, next));
+warehousesRouter.get('/stock/export/csv', (req, res, next) => warehousesController.exportStockCsv(req, res, next));
 warehousesRouter.get('/shipping-rules', (req, res, next) =>
   warehousesController.getShippingRules(req, res, next)
 );

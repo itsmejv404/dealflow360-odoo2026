@@ -46,6 +46,8 @@ import {
   Zap,
   Clock,
   ArrowUpRight,
+  Download,
+  FileSpreadsheet,
 } from 'lucide-vue-next';
 
 const router = useRouter();
@@ -558,6 +560,38 @@ function overrideTargetLabel(o: any): string {
 }
 
 // ---- Realtime inventory updates from other actors ----
+const isExportingCsv = ref(false);
+
+async function exportWarehouseStockAndLogsCsv() {
+  try {
+    isExportingCsv.value = true;
+    const res = await fetch('/api/warehouses/export/csv?download=true', {
+      headers: {
+        Authorization: `Bearer ${authStore.state.token}`,
+      },
+    });
+    if (!res.ok) throw new Error(`Warehouse export failed (${res.status})`);
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition');
+    let fileName = 'warehouse-stock-and-logs.csv';
+    if (disposition && disposition.includes('filename=')) {
+      fileName = disposition.split('filename=')[1]?.replace(/["']/g, '') || fileName;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err: any) {
+    actionError.value = err?.message || 'Failed to export warehouse stocks & logs';
+  } finally {
+    isExportingCsv.value = false;
+  }
+}
+
 async function onInventoryUpdated(data: any) {
   if (!data) return;
   // Another screen adjusted stock — refresh the matrix (the writer already
@@ -621,6 +655,17 @@ onUnmounted(() => {
         </p>
       </div>
       <div class="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          class="font-semibold gap-1.5"
+          :disabled="isExportingCsv"
+          @click="exportWarehouseStockAndLogsCsv"
+        >
+          <RotateCcw v-if="isExportingCsv" class="w-4 h-4 animate-spin" />
+          <FileSpreadsheet v-else class="w-4 h-4 text-emerald-600" />
+          Export Stock & Logs (.csv)
+        </Button>
         <Button
           v-if="canAdjustStock"
           variant="outline"

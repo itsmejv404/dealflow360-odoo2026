@@ -44,6 +44,8 @@ import {
   RefreshCw,
   Sliders,
   Plus,
+  Download,
+  FileSpreadsheet,
 } from 'lucide-vue-next';
 import { invoiceStatusLabel, invoiceTypeLabel, billingLabel } from '@/lib/labels';
 
@@ -211,21 +213,96 @@ async function removeSurcharge(surchargeId: string) {
 
 async function downloadInvoicePdf(inv: InvoiceRecord) {
   try {
-    const res = await fetch(`/api/files/invoices/${inv.id}/pdf`, {
+    const res = await fetch(`/api/files/invoices/${inv.id}/pdf?download=true`, {
       headers: {
         Authorization: `Bearer ${authStore.state.token}`,
       },
     });
-    if (!res.ok) throw new Error(`PDF download failed (${res.status})`);
+    if (!res.ok) throw new Error(`PDF request failed (${res.status})`);
     const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition');
+    let fileName = `invoice-${inv.invoiceNumber}.pdf`;
+    if (disposition && disposition.includes('filename=')) {
+      fileName = disposition.split('filename=')[1]?.replace(/["']/g, '') || fileName;
+    }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${inv.invoiceNumber}.pdf`;
+    a.download = fileName;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   } catch (err: any) {
     alert(err?.message || 'Failed to download the invoice PDF');
+  }
+}
+
+// Export Sales Activities CSV Modal
+const isExportCsvDialogOpen = ref(false);
+const exportStartDate = ref('');
+const exportEndDate = ref('');
+const exportActivityType = ref('all');
+const isExportingCsv = ref(false);
+
+function setExportDatePreset(preset: '7days' | '30days' | 'thisMonth' | 'all') {
+  const now = new Date();
+  if (preset === '7days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    exportStartDate.value = d.toISOString().split('T')[0]!;
+    exportEndDate.value = now.toISOString().split('T')[0]!;
+  } else if (preset === '30days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    exportStartDate.value = d.toISOString().split('T')[0]!;
+    exportEndDate.value = now.toISOString().split('T')[0]!;
+  } else if (preset === 'thisMonth') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    exportStartDate.value = start.toISOString().split('T')[0]!;
+    exportEndDate.value = now.toISOString().split('T')[0]!;
+  } else {
+    exportStartDate.value = '';
+    exportEndDate.value = '';
+  }
+}
+
+async function triggerSalesCsvExport() {
+  try {
+    isExportingCsv.value = true;
+    const params = new URLSearchParams();
+    if (exportStartDate.value) params.set('startDate', exportStartDate.value);
+    if (exportEndDate.value) params.set('endDate', exportEndDate.value);
+    if (exportActivityType.value && exportActivityType.value !== 'all') {
+      params.set('type', exportActivityType.value);
+    }
+    params.set('download', 'true');
+
+    const res = await fetch(`/api/billing/export/sales-activities/csv?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${authStore.state.token}`,
+      },
+    });
+    if (!res.ok) throw new Error(`Export failed with status ${res.status}`);
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition');
+    let fileName = 'sales-activities-export.csv';
+    if (disposition && disposition.includes('filename=')) {
+      fileName = disposition.split('filename=')[1]?.replace(/["']/g, '') || fileName;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    isExportCsvDialogOpen.value = false;
+  } catch (err: any) {
+    alert(err?.message || 'Failed to export sales activities');
+  } finally {
+    isExportingCsv.value = false;
   }
 }
 
@@ -443,6 +520,10 @@ onUnmounted(() => {
           </p>
         </div>
         <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" class="h-9 gap-1.5" @click="isExportCsvDialogOpen = true">
+            <FileSpreadsheet class="w-3.5 h-3.5 text-emerald-600" />
+            Export Sales Activity (.csv)
+          </Button>
           <Button variant="outline" size="sm" class="h-9 gap-1.5" @click="loadBillingData">
             <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': isLoading }" />
             Refresh
@@ -1154,6 +1235,88 @@ onUnmounted(() => {
             >
               <RotateCcw v-if="isPaymentBusy" class="w-3.5 h-3.5 mr-1 animate-spin" />
               Confirm Payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <!-- Export Sales Activities Modal -->
+      <Dialog v-model:open="isExportCsvDialogOpen">
+        <DialogContent class="max-w-md">
+          <DialogHeader>
+            <DialogTitle class="text-base font-semibold flex items-center gap-2">
+              <FileSpreadsheet class="w-4 h-4 text-emerald-600" />
+              Export Sales & Billing Activities
+            </DialogTitle>
+            <DialogDescription class="text-xs">
+              Export sales transactions, invoices, subscriptions, and payments in CSV format.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div class="space-y-4 py-2 text-xs">
+            <!-- Quick Date Presets -->
+            <div>
+              <Label class="text-xs text-muted-foreground block mb-1.5">Quick Presets</Label>
+              <div class="flex flex-wrap gap-1.5">
+                <Button variant="outline" size="sm" class="h-7 text-2xs" @click="setExportDatePreset('7days')">Last 7 Days</Button>
+                <Button variant="outline" size="sm" class="h-7 text-2xs" @click="setExportDatePreset('30days')">Last 30 Days</Button>
+                <Button variant="outline" size="sm" class="h-7 text-2xs" @click="setExportDatePreset('thisMonth')">This Month</Button>
+                <Button variant="outline" size="sm" class="h-7 text-2xs" @click="setExportDatePreset('all')">All Time</Button>
+              </div>
+            </div>
+
+            <!-- Date Range Inputs -->
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <Label for="export-start-date" class="text-xs">Start Date</Label>
+                <Input
+                  id="export-start-date"
+                  v-model="exportStartDate"
+                  type="date"
+                  class="mt-1 h-8 text-xs"
+                />
+              </div>
+              <div>
+                <Label for="export-end-date" class="text-xs">End Date</Label>
+                <Input
+                  id="export-end-date"
+                  v-model="exportEndDate"
+                  type="date"
+                  class="mt-1 h-8 text-xs"
+                />
+              </div>
+            </div>
+
+            <!-- Filter Type -->
+            <div>
+              <Label for="export-activity-type" class="text-xs">Activity Category</Label>
+              <select
+                id="export-activity-type"
+                v-model="exportActivityType"
+                class="w-full mt-1 h-8 text-xs bg-background border border-border rounded-md px-2 text-foreground focus:outline-hidden"
+              >
+                <option value="all">All Sales Activities (Invoices, Subscriptions, Payments, Credit Notes)</option>
+                <option value="invoices">Invoices Only</option>
+                <option value="subscriptions">Subscriptions Only</option>
+                <option value="payments">Payments Only</option>
+                <option value="credit_notes">Credit Notes Only</option>
+              </select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" @click="isExportCsvDialogOpen = false">
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1.5"
+              :disabled="isExportingCsv"
+              @click="triggerSalesCsvExport"
+            >
+              <RotateCcw v-if="isExportingCsv" class="w-3.5 h-3.5 animate-spin" />
+              <Download v-else class="w-3.5 h-3.5" />
+              Download CSV Report
             </Button>
           </DialogFooter>
         </DialogContent>

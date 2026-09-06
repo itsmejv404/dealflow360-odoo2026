@@ -631,6 +631,292 @@ export class BillingService {
     if (!cn) throw new HttpError(404, 'Credit note not found in this organization');
     return cn;
   }
+
+  // ==================== SALES ACTIVITIES CSV EXPORT ====================
+
+  async exportSalesActivitiesCsv(
+    orgId: string,
+    options?: { startDate?: string; endDate?: string; type?: string }
+  ) {
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { name: true, slug: true, currency: true },
+    });
+    if (!org) throw new HttpError(404, 'Organization not found');
+
+    const start = options?.startDate ? new Date(options.startDate) : new Date(0);
+    const end = options?.endDate ? new Date(new Date(options.endDate).setHours(23, 59, 59, 999)) : new Date(8640000000000000);
+
+    const typeFilter = options?.type || 'all';
+
+    const [invoices, subscriptions, creditNotes, payments, auditLogs] = await Promise.all([
+      ['all', 'invoices'].includes(typeFilter)
+        ? prisma.invoice.findMany({
+            where: {
+              organizationId: orgId,
+              createdAt: { gte: start, lte: end },
+            },
+            include: {
+              quotation: { select: { quotationNumber: true, customer: true } },
+              surcharges: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [],
+      ['all', 'subscriptions'].includes(typeFilter)
+        ? prisma.subscription.findMany({
+            where: {
+              organizationId: orgId,
+              createdAt: { gte: start, lte: end },
+            },
+            include: {
+              quotationLine: {
+                include: {
+                  quotation: { select: { quotationNumber: true, customer: true } },
+                  product: { select: { name: true, sku: true } },
+                },
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [],
+      ['all', 'credit_notes'].includes(typeFilter)
+        ? prisma.creditNote.findMany({
+            where: {
+              organizationId: orgId,
+              createdAt: { gte: start, lte: end },
+            },
+            include: {
+              quotation: { select: { quotationNumber: true, customer: true } },
+              invoice: { select: { invoiceNumber: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [],
+      ['all', 'payments'].includes(typeFilter)
+        ? prisma.payment.findMany({
+            where: {
+              organizationId: orgId,
+              createdAt: { gte: start, lte: end },
+            },
+            include: {
+              invoice: { select: { invoiceNumber: true, quotation: { select: { customer: true } } } },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [],
+      prisma.auditLog.findMany({
+        where: {
+          organizationId: orgId,
+          createdAt: { gte: start, lte: end },
+          OR: [
+            { entityType: { in: ['invoice', 'subscription', 'credit_note', 'payment', 'billing'] } },
+            { action: { in: ['invoice_issued', 'payment_received', 'subscription_created', 'proration_applied', 'credit_note_issued', 'refund_processed'] } },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+      }),
+    ]);
+
+    interface ActivityRow {
+      timestamp: Date;
+      category: string;
+      activityType: string;
+      refNumber: string;
+      customerName: string;
+      customerEmail: string;
+      currency: string;
+      subtotal: number;
+      discountAmount: number;
+      surchargeAmount: number;
+      totalAmount: number;
+      status: string;
+      paymentMethod: string;
+      notes: string;
+    }
+
+    const activities: ActivityRow[] = [];
+
+    // 1. Invoices
+    for (const inv of invoices) {
+      const surchargeSum = inv.surcharges.reduce((s, c) => s + Number(c.computedAmount), 0);
+      activities.push({
+        timestamp: inv.issuedAt || inv.createdAt,
+        category: 'Invoice',
+        activityType: `Invoice ${inv.status.toUpperCase()}`,
+        refNumber: inv.invoiceNumber,
+        customerName: inv.quotation?.customer?.name || 'N/A',
+        customerEmail: inv.quotation?.customer?.email || 'N/A',
+        currency: inv.currency || org.currency,
+        subtotal: Number(inv.subtotal),
+        discountAmount: Number(inv.discountAmount),
+        surchargeAmount: surchargeSum,
+        totalAmount: Number(inv.totalAmount),
+        status: inv.status,
+        paymentMethod: inv.type.replace(/_/g, ' '),
+        notes: inv.notes || '',
+      });
+    }
+
+    // 2. Subscriptions
+    for (const sub of subscriptions) {
+      activities.push({
+        timestamp: sub.createdAt,
+        category: 'Subscription',
+        activityType: 'Subscription Created / Activated',
+        refNumber: sub.subscriptionNumber,
+        customerName: sub.quotationLine?.quotation?.customer?.name || 'N/A',
+        customerEmail: sub.quotationLine?.quotation?.customer?.email || 'N/A',
+        currency: sub.currency || org.currency,
+        subtotal: Number(sub.recurringAmount),
+        discountAmount: 0,
+        surchargeAmount: 0,
+        totalAmount: Number(sub.recurringAmount),
+        status: sub.status,
+        paymentMethod: 'Subscription Recurring',
+        notes: `${sub.name} (Qty: ${sub.quantity}, ${sub.billingFrequency})`,
+      });
+    }
+
+    // 3. Credit Notes
+    for (const cn of creditNotes) {
+      activities.push({
+        timestamp: cn.createdAt,
+        category: 'Credit Note',
+        activityType: `Credit Note ${cn.status.toUpperCase()}`,
+        refNumber: cn.creditNoteNumber,
+        customerName: cn.quotation?.customer?.name || 'N/A',
+        customerEmail: cn.quotation?.customer?.email || 'N/A',
+        currency: cn.currency || org.currency,
+        subtotal: Number(cn.amount),
+        discountAmount: 0,
+        surchargeAmount: 0,
+        totalAmount: -Number(cn.amount), // Credit note is a reduction/refund
+        status: cn.status,
+        paymentMethod: 'Account Credit',
+        notes: cn.reason || '',
+      });
+    }
+
+    // 4. Payments
+    for (const pay of payments) {
+      activities.push({
+        timestamp: pay.createdAt,
+        category: 'Payment',
+        activityType: `Payment ${pay.status.toUpperCase()}`,
+        refNumber: pay.transactionReference || pay.id,
+        customerName: pay.invoice?.quotation?.customer?.name || 'N/A',
+        customerEmail: pay.invoice?.quotation?.customer?.email || 'N/A',
+        currency: pay.currency || org.currency,
+        subtotal: Number(pay.amount),
+        discountAmount: 0,
+        surchargeAmount: 0,
+        totalAmount: Number(pay.amount),
+        status: pay.status,
+        paymentMethod: pay.paymentMethod || 'sandbox',
+        notes: pay.errorMessage || `Payment for invoice ${pay.invoice?.invoiceNumber || pay.invoiceId || ''}`,
+      });
+    }
+
+    // Sort all activities in reverse chronological order
+    activities.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+    const escapeCsv = (val: unknown): string => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return `"${str}"`;
+    };
+
+    const rows: string[] = [];
+
+    rows.push(escapeCsv(`DEALFLOW360 - SALES & BILLING ACTIVITIES REPORT`));
+    rows.push([
+      escapeCsv('Organization:'),
+      escapeCsv(org.name),
+      escapeCsv('Date Range:'),
+      escapeCsv(`${options?.startDate || 'Earliest'} to ${options?.endDate || 'Latest'}`),
+      escapeCsv('Exported At:'),
+      escapeCsv(new Date().toISOString()),
+    ].join(','));
+    rows.push('');
+
+    const headers = [
+      'Timestamp (ISO)',
+      'Timestamp (Local)',
+      'Category',
+      'Activity Type',
+      'Reference #',
+      'Customer Name',
+      'Customer Email',
+      'Currency',
+      'Subtotal',
+      'Discount Amount',
+      'Surcharge Amount',
+      'Total Amount',
+      'Status',
+      'Payment Method',
+      'Notes / Reason',
+    ];
+    rows.push(headers.map(escapeCsv).join(','));
+
+    let totalRevenue = 0;
+
+    for (const a of activities) {
+      totalRevenue += a.totalAmount;
+      rows.push(
+        [
+          a.timestamp.toISOString(),
+          new Date(a.timestamp).toLocaleString(),
+          a.category,
+          a.activityType,
+          a.refNumber,
+          a.customerName,
+          a.customerEmail,
+          a.currency,
+          a.subtotal.toFixed(2),
+          a.discountAmount.toFixed(2),
+          a.surchargeAmount.toFixed(2),
+          a.totalAmount.toFixed(2),
+          a.status,
+          a.paymentMethod,
+          a.notes,
+        ]
+          .map(escapeCsv)
+          .join(',')
+      );
+    }
+
+    rows.push('');
+    rows.push([
+      'TOTAL SALES & TRANSACTIONS',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      org.currency,
+      '',
+      '',
+      '',
+      totalRevenue.toFixed(2),
+      '',
+      '',
+      '',
+    ].map(escapeCsv).join(','));
+
+    const startLabel = options?.startDate ? options.startDate.replace(/[^0-9]/g, '-') : 'all';
+    const endLabel = options?.endDate ? options.endDate.replace(/[^0-9]/g, '-') : 'now';
+
+    return {
+      fileName: `sales-activities-${org.slug}-${startLabel}-to-${endLabel}.csv`,
+      content: rows.join('\r\n'),
+    };
+  }
 }
 
 export const billingService = new BillingService();

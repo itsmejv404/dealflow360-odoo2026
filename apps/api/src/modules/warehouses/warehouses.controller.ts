@@ -206,6 +206,23 @@ export class WarehousesController {
       next(err);
     }
   }
+
+  async exportStockCsv(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const orgId = req.tenant!.orgId;
+      const data = await warehousesService.exportStockAndLogsCsv(orgId);
+
+      if (req.query.download === 'true') {
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${data.fileName}"`);
+        res.send(data.content);
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const warehousesController = new WarehousesController();

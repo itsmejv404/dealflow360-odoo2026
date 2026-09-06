@@ -606,6 +606,180 @@ export class WarehousesService {
 
     return { level, newQuantity, quantityAdded };
   }
+
+  // ==================== WAREHOUSE STOCKS & VALUATION CSV EXPORT ====================
+
+  async exportStockAndLogsCsv(orgId: string) {
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { name: true, slug: true, currency: true },
+    });
+    if (!org) throw new HttpError(404, 'Organization not found');
+
+    const [warehouses, products, stockLevels, auditLogs] = await Promise.all([
+      prisma.warehouse.findMany({
+        where: { organizationId: orgId },
+        orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      }),
+      prisma.product.findMany({
+        where: { organizationId: orgId },
+        include: { category: true },
+        orderBy: [{ name: 'asc' }],
+      }),
+      prisma.stockLevel.findMany({
+        where: { organizationId: orgId },
+      }),
+      prisma.auditLog.findMany({
+        where: {
+          organizationId: orgId,
+          OR: [
+            { entityType: 'warehouse' },
+            { entityType: 'inventory' },
+            { entityType: 'fulfillment' },
+            { action: { in: ['stock_arrival', 'stock_adjusted', 'fulfillment_accepted', 'backorder_consolidated'] } },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 1000,
+      }),
+    ]);
+
+    const quantityMap = new Map<string, number>();
+    for (const lvl of stockLevels) {
+      quantityMap.set(`${lvl.warehouseId}:${lvl.productId}`, lvl.quantity);
+    }
+
+    const escapeCsv = (val: unknown): string => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return `"${str}"`;
+    };
+
+    const rows: string[] = [];
+
+    // Header info
+    rows.push(escapeCsv(`DEALFLOW360 - WAREHOUSE STOCK VALUATION & AUDIT LOGS REPORT`));
+    rows.push([escapeCsv('Organization:'), escapeCsv(org.name), escapeCsv('Currency:'), escapeCsv(org.currency), escapeCsv('Exported At:'), escapeCsv(new Date().toISOString())].join(','));
+    rows.push('');
+
+    // --- Section 1: Stock Matrix & Valuation ---
+    rows.push(escapeCsv('=== CURRENT STOCK VALUATION BY WAREHOUSE ==='));
+    const stockHeaders = [
+      'Product SKU',
+      'Product Name',
+      'Category',
+      'Warehouse Code',
+      'Warehouse Name',
+      'Warehouse City',
+      'Warehouse Status',
+      'Quantity On Hand',
+      `Unit Value (${org.currency})`,
+      `Total Valuation (${org.currency})`,
+      'Stock Status',
+    ];
+    rows.push(stockHeaders.map(escapeCsv).join(','));
+
+    let grandTotalQty = 0;
+    let grandTotalValuation = 0;
+
+    for (const p of products) {
+      const unitCost = Number(p.costPrice ?? p.price ?? 0);
+      for (const w of warehouses) {
+        const qty = quantityMap.get(`${w.id}:${p.id}`) ?? 0;
+        const totalVal = this.round2(qty * unitCost);
+        grandTotalQty += qty;
+        grandTotalValuation += totalVal;
+
+        const stockStatus = qty === 0 ? 'Out of Stock' : qty < 10 ? 'Low Stock' : 'In Stock';
+
+        rows.push(
+          [
+            p.sku,
+            p.name,
+            p.category?.name || 'Uncategorized',
+            w.code,
+            w.name,
+            w.city || 'N/A',
+            w.status,
+            qty,
+            unitCost.toFixed(2),
+            totalVal.toFixed(2),
+            stockStatus,
+          ]
+            .map(escapeCsv)
+            .join(',')
+        );
+      }
+    }
+
+    // Totals summary row
+    rows.push(
+      [
+        'TOTALS',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        grandTotalQty,
+        '',
+        this.round2(grandTotalValuation).toFixed(2),
+        '',
+      ]
+        .map(escapeCsv)
+        .join(',')
+    );
+
+    rows.push('');
+    rows.push('');
+
+    // --- Section 2: Stock Movement & Warehouse Activity Logs ---
+    rows.push(escapeCsv('=== INVENTORY & WAREHOUSE ACTIVITY AUDIT TRAIL ==='));
+    const logHeaders = [
+      'Timestamp (ISO)',
+      'Timestamp (Local)',
+      'Action',
+      'Actor Email',
+      'Actor Role',
+      'Entity Type',
+      'Entity ID',
+      'Reason / Note',
+      'Metadata Snapshot',
+    ];
+    rows.push(logHeaders.map(escapeCsv).join(','));
+
+    if (auditLogs.length === 0) {
+      rows.push(escapeCsv('No warehouse activity audit logs recorded yet.'));
+    } else {
+      for (const log of auditLogs) {
+        rows.push(
+          [
+            log.createdAt.toISOString(),
+            new Date(log.createdAt).toLocaleString(),
+            log.action.replace(/_/g, ' ').toUpperCase(),
+            log.userEmail || 'System',
+            log.userRole || 'Automated',
+            log.entityType,
+            log.entityId,
+            log.reason || '',
+            log.metadata ? JSON.stringify(log.metadata) : '',
+          ]
+            .map(escapeCsv)
+            .join(',')
+        );
+      }
+    }
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    return {
+      fileName: `warehouse-stocks-and-logs-${org.slug}-${dateStr}.csv`,
+      content: rows.join('\r\n'),
+    };
+  }
 }
 
 export const warehousesService = new WarehousesService();

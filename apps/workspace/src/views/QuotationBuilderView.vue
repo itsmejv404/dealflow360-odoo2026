@@ -64,6 +64,7 @@ import {
   CreditCard,
   Sliders,
   ExternalLink,
+  Download,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -312,6 +313,72 @@ async function loadAuditTrail(quotationId: string) {
     console.warn('Failed to load audit trail:', err);
   } finally {
     isAuditLoading.value = false;
+  }
+}
+
+const isExportingLogs = ref(false);
+
+async function exportQuotationLogsTxt(quotationId: string) {
+  if (!quotationId) return;
+  try {
+    isExportingLogs.value = true;
+    const res = await fetch(`/api/files/quotations/${quotationId}/logs/txt?download=true`, {
+      headers: {
+        Authorization: `Bearer ${authStore.state.token}`,
+      },
+    });
+    if (!res.ok) throw new Error(`Failed to export quotation logs (${res.status})`);
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition');
+    let fileName = `quotation-${quotationId}-logs.txt`;
+    if (disposition && disposition.includes('filename=')) {
+      fileName = disposition.split('filename=')[1]?.replace(/["']/g, '') || fileName;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err: any) {
+    alert(err?.message || 'Failed to export quotation logs');
+  } finally {
+    isExportingLogs.value = false;
+  }
+}
+
+const isDownloadingPdf = ref(false);
+
+async function downloadQuotationPdf(quotationId: string) {
+  if (!quotationId) return;
+  try {
+    isDownloadingPdf.value = true;
+    const res = await fetch(`/api/files/quotations/${quotationId}/pdf?download=true`, {
+      headers: {
+        Authorization: `Bearer ${authStore.state.token}`,
+      },
+    });
+    if (!res.ok) throw new Error(`Failed to download quotation PDF (${res.status})`);
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition');
+    let fileName = `quotation-${quotationNumber.value}.pdf`;
+    if (disposition && disposition.includes('filename=')) {
+      fileName = disposition.split('filename=')[1]?.replace(/["']/g, '') || fileName;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err: any) {
+    alert(err?.message || 'Failed to download quotation PDF');
+  } finally {
+    isDownloadingPdf.value = false;
   }
 }
 
@@ -1439,6 +1506,20 @@ onUnmounted(() => {
             Recalculate
           </Button>
 
+          <!-- Download Quotation PDF -->
+          <Button
+            v-if="isEditMode"
+            variant="outline"
+            size="sm"
+            class="h-9"
+            :disabled="isDownloadingPdf"
+            @click="downloadQuotationPdf(quoteId!)"
+            title="Download Quotation PDF"
+          >
+            <Download class="w-4 h-4 mr-1.5" />
+            PDF
+          </Button>
+
           <!-- Submit for Approval button (visible if draft or rejected and quote is saved) -->
           <Button
             v-if="isEditMode && ['draft', 'rejected'].includes(quotationStatus)"
@@ -1778,15 +1859,27 @@ onUnmounted(() => {
                     Immutable history of submissions, discount threshold approvals, and escalations.
                   </CardDescription>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  class="h-7 text-xs text-muted-foreground"
-                  @click="loadAuditTrail(quoteId!)"
-                >
-                  <RotateCcw class="w-3.5 h-3.5 mr-1" :class="{ 'animate-spin': isAuditLoading }" />
-                  Refresh
-                </Button>
+                <div class="flex items-center gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-7 text-xs gap-1"
+                    :disabled="isExportingLogs"
+                    @click="exportQuotationLogsTxt(quoteId!)"
+                  >
+                    <Download class="w-3 h-3 text-primary" />
+                    Export Logs (.txt)
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-7 text-xs text-muted-foreground"
+                    @click="loadAuditTrail(quoteId!)"
+                  >
+                    <RotateCcw class="w-3.5 h-3.5 mr-1" :class="{ 'animate-spin': isAuditLoading }" />
+                    Refresh
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent class="pt-4">

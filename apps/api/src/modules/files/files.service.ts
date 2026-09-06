@@ -3,6 +3,7 @@ import { storageService } from '../../lib/storage.js';
 import { buildPdf, PDF_PAGE, type PdfElement } from '../../lib/pdf.js';
 import { decodePng } from '../../lib/png.js';
 import { buildXls, type XlsCell } from '../../lib/xls.js';
+import { generateInvoiceHtml, convertHtmlToPdf } from '../../lib/gotenberg.js';
 import { HttpError } from '../../shared/errors.js';
 import { logger } from '../../lib/logger.js';
 
@@ -81,6 +82,34 @@ export class FilesService {
       return decodePng(buffer);
     } catch (err: any) {
       logger.warn({ orgId, logoUrl, err: err.message }, 'Could not load org logo for PDF; rendering without it');
+      return null;
+    }
+  }
+
+  /**
+   * Load the org logo as a base64 data URI for HTML/Gotenberg PDF rendering.
+   */
+  private async getLogoBase64(orgId: string, logoUrl?: string | null): Promise<string | null> {
+    if (!logoUrl) return null;
+    try {
+      if (logoUrl.startsWith('http://') || logoUrl.startsWith('https://')) {
+        const res = await fetch(logoUrl);
+        if (!res.ok) return null;
+        const mime = res.headers.get('content-type') || 'image/png';
+        const buf = Buffer.from(await res.arrayBuffer());
+        return `data:${mime};base64,${buf.toString('base64')}`;
+      } else {
+        const stream = await storageService.getTenantFileStream(orgId, logoUrl.replace(/^\//, ''));
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream.body as unknown as AsyncIterable<Buffer>) {
+          chunks.push(Buffer.from(chunk));
+        }
+        const buf = Buffer.concat(chunks);
+        if (buf.length === 0) return null;
+        const mime = logoUrl.endsWith('.jpg') || logoUrl.endsWith('.jpeg') ? 'image/jpeg' : 'image/png';
+        return `data:${mime};base64,${buf.toString('base64')}`;
+      }
+    } catch {
       return null;
     }
   }
@@ -195,7 +224,7 @@ export class FilesService {
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, organizationId: orgId },
       include: {
-        organization: { select: { id: true, name: true, currency: true, logoUrl: true } },
+        organization: { select: { id: true, name: true, slug: true, currency: true, logoUrl: true } },
         quotation: { select: { quotationNumber: true, customer: { select: { name: true, email: true } } } },
         lines: true,
         surcharges: true,
@@ -203,97 +232,46 @@ export class FilesService {
     });
     if (!invoice) throw new HttpError(404, 'Invoice not found in this organization');
 
-    const currency = invoice.currency || invoice.organization.currency || 'USD';
     const key = `documents/invoice-${invoice.invoiceNumber}.pdf`;
+    const logoBase64 = await this.getLogoBase64(orgId, invoice.organization.logoUrl);
 
-    const elements: PdfElement[] = [];
-    let y = PDF_PAGE.height - M;
+    const invoiceHtml = generateInvoiceHtml({
+      orgName: invoice.organization.name,
+      orgSlug: invoice.organization.slug,
+      orgLogoBase64: logoBase64,
+      orgCurrency: invoice.currency || invoice.organization.currency || 'USD',
+      invoiceNumber: invoice.invoiceNumber,
+      type: invoice.type,
+      status: invoice.status,
+      issuedAt: invoice.issuedAt.toISOString().split('T')[0]!,
+      dueDate: invoice.dueDate.toISOString().split('T')[0]!,
+      quotationNumber: invoice.quotation?.quotationNumber,
+      customerName: invoice.quotation?.customer?.name,
+      customerEmail: invoice.quotation?.customer?.email,
+      lines: invoice.lines.map((l) => ({
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: Number(l.unitPrice),
+        discountPercent: l.discountPercent ? Number(l.discountPercent) : null,
+        totalAmount: Number(l.totalAmount),
+      })),
+      surcharges: invoice.surcharges.map((s) => ({
+        label: s.label,
+        kind: s.kind,
+        value: Number(s.value),
+        computedAmount: Number(s.computedAmount),
+      })),
+      subtotal: Number(invoice.subtotal),
+      discountAmount: Number(invoice.discountAmount),
+      totalAmount: Number(invoice.totalAmount),
+      notes: invoice.notes,
+    });
 
-    // Company logo, top-left corner (falls back to a text-only header when
-    // no logo is configured or the asset cannot be decoded)
-    const logo = await this.loadLogoImage(orgId, invoice.organization.logoUrl);
-    if (logo) {
-      const logoH = 44;
-      const logoW = Math.min((logo.width / logo.height) * logoH, 150);
-      elements.push({
-        kind: 'image',
-        x: M,
-        y: y - logoH,
-        width: logoW,
-        height: logoH,
-        rgb: logo.rgb,
-        pixelWidth: logo.width,
-        pixelHeight: logo.height,
-      });
-      y -= logoH + 6;
-    }
-
-    const head = renderHeader(
-      { orgName: invoice.organization.name, docTitle: 'INVOICE', subtitle: invoice.invoiceNumber },
-      y
-    );
-    elements.push(...head.elements);
-    y = head.y;
-
-    elements.push({ kind: 'text', x: M, y, size: 10, bold: true, text: `Bill To: ${invoice.quotation?.customer?.name || 'N/A'}` });
-    elements.push({ kind: 'text', x: M + 260, y, size: 9, text: `Issued: ${invoice.issuedAt.toISOString().split('T')[0]}   Due: ${invoice.dueDate.toISOString().split('T')[0]}`, gray: 0.4 });
-    y -= 14;
-    elements.push({ kind: 'text', x: M, y, size: 9, text: `Quotation: ${invoice.quotation?.quotationNumber || '—'}   Type: ${invoice.type}`, gray: 0.4 });
-    y -= 24;
-    elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-    y -= 16;
-
-    elements.push({ kind: 'text', x: M, y, size: 9, bold: true, text: 'DESCRIPTION' });
-    elements.push({ kind: 'text', x: M + 300, y, size: 9, bold: true, text: 'QTY' });
-    elements.push({ kind: 'text', x: M + 350, y, size: 9, bold: true, text: 'UNIT' });
-    elements.push({ kind: 'text', x: M + 430, y, size: 9, bold: true, text: 'TOTAL' });
-    y -= 6;
-    elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-    y -= 14;
-
-    for (const line of invoice.lines) {
-      const lines = wrapText(line.description, 50);
-      for (const nl of lines) {
-        elements.push({ kind: 'text', x: M, y, size: 9, text: nl });
-        y -= 12;
-      }
-      elements.push({ kind: 'text', x: M + 300, y: y + 12, size: 9, text: String(line.quantity) });
-      elements.push({ kind: 'text', x: M + 350, y: y + 12, size: 9, text: money(line.unitPrice, '') });
-      elements.push({ kind: 'text', x: M + 430, y: y + 12, size: 9, text: money(line.totalAmount, '') });
-      y -= 8;
-    }
-
-    // Surcharges (additional charges) above the total
-    if (invoice.surcharges.length > 0) {
-      y -= 12;
-      elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-      y -= 16;
-      for (const s of invoice.surcharges) {
-        elements.push({
-          kind: 'text',
-          x: M + 300,
-          y,
-          size: 9,
-          text: `${s.label} (${s.kind === 'percent' ? `${Number(s.value)}%` : money(s.value, currency)})`,
-        });
-        elements.push({ kind: 'text', x: M + 430, y, size: 9, text: money(s.computedAmount, currency) });
-        y -= 13;
-      }
-    }
-
-    y -= 12;
-    elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-    y -= 20;
-    elements.push({ kind: 'text', x: M + 330, y, size: 12, bold: true, text: 'Total Due' });
-    elements.push({ kind: 'text', x: M + 430, y, size: 12, bold: true, text: money(invoice.totalAmount, currency) });
-
-    y -= 30;
-    elements.push({ kind: 'text', x: M, y, size: 8, text: `Invoice ${invoice.invoiceNumber} — ${invoice.organization.name} via DealFlow360`, gray: 0.55 });
-
-    const pdf = buildPdf(elements, 1);
+    const pdf = await convertHtmlToPdf(invoiceHtml);
     await storageService.uploadTenantFile({ orgId, key, buffer: pdf, contentType: 'application/pdf' });
 
     const signedUrl = await storageService.getTenantSignedUrl(orgId, key, 900);
+    logger.info({ orgId, invoiceId, key }, 'Invoice PDF generated via HTML-to-PDF');
     return { key, signedUrl, fileName: `invoice-${invoice.invoiceNumber}.pdf` };
   }
 
@@ -305,7 +283,7 @@ export class FilesService {
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, organizationId: orgId },
       include: {
-        organization: { select: { id: true, name: true, currency: true, logoUrl: true } },
+        organization: { select: { id: true, name: true, slug: true, currency: true, logoUrl: true } },
         quotation: { select: { quotationNumber: true, customer: { select: { name: true, email: true } } } },
         lines: true,
         surcharges: true,
@@ -313,89 +291,109 @@ export class FilesService {
     });
     if (!invoice) throw new HttpError(404, 'Invoice not found in this organization');
 
-    const currency = invoice.currency || invoice.organization.currency || 'USD';
-    const elements: PdfElement[] = [];
-    let y = PDF_PAGE.height - M;
+    const logoBase64 = await this.getLogoBase64(orgId, invoice.organization.logoUrl);
 
-    const logo = await this.loadLogoImage(orgId, invoice.organization.logoUrl);
-    if (logo) {
-      const logoH = 44;
-      const logoW = Math.min((logo.width / logo.height) * logoH, 150);
-      elements.push({
-        kind: 'image',
-        x: M,
-        y: y - logoH,
-        width: logoW,
-        height: logoH,
-        rgb: logo.rgb,
-        pixelWidth: logo.width,
-        pixelHeight: logo.height,
+    const invoiceHtml = generateInvoiceHtml({
+      orgName: invoice.organization.name,
+      orgSlug: invoice.organization.slug,
+      orgLogoBase64: logoBase64,
+      orgCurrency: invoice.currency || invoice.organization.currency || 'USD',
+      invoiceNumber: invoice.invoiceNumber,
+      type: invoice.type,
+      status: invoice.status,
+      issuedAt: invoice.issuedAt.toISOString().split('T')[0]!,
+      dueDate: invoice.dueDate.toISOString().split('T')[0]!,
+      quotationNumber: invoice.quotation?.quotationNumber,
+      customerName: invoice.quotation?.customer?.name,
+      customerEmail: invoice.quotation?.customer?.email,
+      lines: invoice.lines.map((l) => ({
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: Number(l.unitPrice),
+        discountPercent: l.discountPercent ? Number(l.discountPercent) : null,
+        totalAmount: Number(l.totalAmount),
+      })),
+      surcharges: invoice.surcharges.map((s) => ({
+        label: s.label,
+        kind: s.kind,
+        value: Number(s.value),
+        computedAmount: Number(s.computedAmount),
+      })),
+      subtotal: Number(invoice.subtotal),
+      discountAmount: Number(invoice.discountAmount),
+      totalAmount: Number(invoice.totalAmount),
+      notes: invoice.notes,
+    });
+
+    const pdf = await convertHtmlToPdf(invoiceHtml);
+    return { pdf, fileName: `invoice-${invoice.invoiceNumber}.pdf` };
+  }
+
+  // ==================== Quotation Logs Export (TXT) ====================
+
+  async getQuotationLogsTxt(orgId: string, quotationId: string) {
+    const quotation = await prisma.quotation.findFirst({
+      where: { id: quotationId, organizationId: orgId },
+      include: {
+        organization: { select: { name: true, slug: true, currency: true } },
+        customer: true,
+        rep: { select: { name: true, email: true, role: true } },
+      },
+    });
+    if (!quotation) throw new HttpError(404, 'Quotation not found in this organization');
+
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { organizationId: orgId, entityType: 'quotation', entityId: quotationId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const sep = '='.repeat(80);
+    const subSep = '-'.repeat(80);
+
+    const lines: string[] = [
+      sep,
+      `DEALFLOW360 - QUOTATION GOVERNANCE & LIFECYCLE AUDIT TRAIL`,
+      sep,
+      `Quotation Reference : ${quotation.quotationNumber}`,
+      `Organization        : ${quotation.organization.name} (${quotation.organization.slug})`,
+      `Customer Name       : ${quotation.customer.name}`,
+      `Customer Email      : ${quotation.customer.email}`,
+      `Account Rep         : ${quotation.rep?.name || quotation.rep?.email || 'N/A'} (${quotation.rep?.role || 'rep'})`,
+      `Status              : ${quotation.status.toUpperCase()}`,
+      `Currency            : ${quotation.organization.currency}`,
+      `Total Value         : ${quotation.totalAmount.toString()} ${quotation.organization.currency}`,
+      `Exported Timestamp  : ${new Date().toISOString()}`,
+      sep,
+      '',
+      `CHRONOLOGICAL EVENT LOGS (${auditLogs.length} Records Found):`,
+      subSep,
+    ];
+
+    if (auditLogs.length === 0) {
+      lines.push('No audit trail entries recorded for this quotation.');
+    } else {
+      auditLogs.forEach((log, index) => {
+        lines.push(`[EVENT #${index + 1}]`);
+        lines.push(`Timestamp : ${log.createdAt.toISOString()} (${new Date(log.createdAt).toLocaleString()})`);
+        lines.push(`Action    : ${log.action.replace(/_/g, ' ').toUpperCase()} [${log.action}]`);
+        lines.push(`Actor     : ${log.userEmail || 'System'} (Role: ${log.userRole || 'System / Automated'})`);
+        if (log.reason) {
+          lines.push(`Reason    : ${log.reason}`);
+        }
+        if (log.metadata && Object.keys(log.metadata).length > 0) {
+          lines.push(`Metadata  : ${JSON.stringify(log.metadata, null, 2).replace(/\n/g, '\n            ')}`);
+        }
+        lines.push(subSep);
       });
-      y -= logoH + 6;
     }
 
-    const head = renderHeader(
-      { orgName: invoice.organization.name, docTitle: 'INVOICE', subtitle: invoice.invoiceNumber },
-      y
-    );
-    elements.push(...head.elements);
-    y = head.y;
+    lines.push('');
+    lines.push(`-- END OF AUDIT LOG FOR QUOTATION ${quotation.quotationNumber} --`);
 
-    elements.push({ kind: 'text', x: M, y, size: 10, bold: true, text: `Bill To: ${invoice.quotation?.customer?.name || 'N/A'}` });
-    elements.push({ kind: 'text', x: M + 260, y, size: 9, text: `Issued: ${invoice.issuedAt.toISOString().split('T')[0]}   Due: ${invoice.dueDate.toISOString().split('T')[0]}`, gray: 0.4 });
-    y -= 14;
-    elements.push({ kind: 'text', x: M, y, size: 9, text: `Quotation: ${invoice.quotation?.quotationNumber || '—'}   Type: ${invoice.type}`, gray: 0.4 });
-    y -= 24;
-    elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-    y -= 16;
-
-    elements.push({ kind: 'text', x: M, y, size: 9, bold: true, text: 'DESCRIPTION' });
-    elements.push({ kind: 'text', x: M + 300, y, size: 9, bold: true, text: 'QTY' });
-    elements.push({ kind: 'text', x: M + 350, y, size: 9, bold: true, text: 'UNIT' });
-    elements.push({ kind: 'text', x: M + 430, y, size: 9, bold: true, text: 'TOTAL' });
-    y -= 6;
-    elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-    y -= 14;
-
-    for (const line of invoice.lines) {
-      const wrapped = wrapText(line.description, 50);
-      for (const nl of wrapped) {
-        elements.push({ kind: 'text', x: M, y, size: 9, text: nl });
-        y -= 12;
-      }
-      elements.push({ kind: 'text', x: M + 300, y: y + 12, size: 9, text: String(line.quantity) });
-      elements.push({ kind: 'text', x: M + 350, y: y + 12, size: 9, text: money(line.unitPrice, '') });
-      elements.push({ kind: 'text', x: M + 430, y: y + 12, size: 9, text: money(line.totalAmount, '') });
-      y -= 8;
-    }
-
-    if (invoice.surcharges.length > 0) {
-      y -= 12;
-      elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-      y -= 16;
-      for (const s of invoice.surcharges) {
-        elements.push({
-          kind: 'text',
-          x: M + 300,
-          y,
-          size: 9,
-          text: `${s.label} (${s.kind === 'percent' ? `${Number(s.value)}%` : money(s.value, currency)})`,
-        });
-        elements.push({ kind: 'text', x: M + 430, y, size: 9, text: money(s.computedAmount, currency) });
-        y -= 13;
-      }
-    }
-
-    y -= 12;
-    elements.push({ kind: 'rule', x1: M, y1: y, x2: PDF_PAGE.width - M, y2: y, gray: 0.8 });
-    y -= 20;
-    elements.push({ kind: 'text', x: M + 330, y, size: 12, bold: true, text: 'Total Due' });
-    elements.push({ kind: 'text', x: M + 430, y, size: 12, bold: true, text: money(invoice.totalAmount, currency) });
-
-    y -= 30;
-    elements.push({ kind: 'text', x: M, y, size: 8, text: `Invoice ${invoice.invoiceNumber} — ${invoice.organization.name} via DealFlow360`, gray: 0.55 });
-
-    return { pdf: buildPdf(elements, 1), fileName: `invoice-${invoice.invoiceNumber}.pdf` };
+    return {
+      fileName: `quotation-${quotation.quotationNumber}-audit-logs.txt`,
+      content: lines.join('\n'),
+    };
   }
 
   // ==================== Deals Report (PDF / XLS) ====================

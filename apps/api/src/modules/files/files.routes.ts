@@ -23,6 +23,10 @@ filesRouter.use(tenantContextMiddleware);
 // Quotation PDF — internal users and customer tokens (scoped to their own quotes)
 filesRouter.get('/quotations/:id/pdf', (req, res, next) => filesController.quotationPdf(req, res, next));
 
+// Quotation Logs in TXT format
+filesRouter.get('/quotations/:id/logs.txt', (req, res, next) => filesController.quotationLogsTxt(req, res, next));
+filesRouter.get('/quotations/:id/logs/txt', (req, res, next) => filesController.quotationLogsTxt(req, res, next));
+
 // Invoice PDF
 filesRouter.get('/invoices/:id/pdf', (req, res, next) => filesController.invoicePdf(req, res, next));
 

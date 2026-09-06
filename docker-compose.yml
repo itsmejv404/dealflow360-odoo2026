@@ -56,6 +56,12 @@ services:
       - "8025:8025"
     networks: [dealflow]
 
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    ports:
+      - "3001:3000"
+    networks: [dealflow]
+
   api:
     build:
       context: .
@@ -80,6 +86,7 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
+      GOTENBERG_URL: ${GOTENBERG_URL:-http://gotenberg:3000}
       JWT_SECRET: ${JWT_SECRET:-dealflow360-super-secret-key-for-dev-only}
       SOCKET_CORS_ORIGINS: ${SOCKET_CORS_ORIGINS:-http://localhost,http://localhost:5173,http://localhost:5174}
       PORTAL_URL: ${PORTAL_URL:-http://localhost}

@@ -244,7 +244,7 @@ function getStatusBadge(status: string) {
     case 'negotiating':
       return { variant: 'outline', label: 'Under Negotiation', class: 'bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-300' };
     case 'confirmed':
-      return { variant: 'default', label: 'Confirmed (Won)', class: 'bg-primary text-primary-foreground' };
+      return { variant: 'default', label: 'Confirmed', class: 'bg-primary text-primary-foreground' };
     case 'rejected':
       return { variant: 'destructive', label: 'Rejected', class: '' };
     default:
