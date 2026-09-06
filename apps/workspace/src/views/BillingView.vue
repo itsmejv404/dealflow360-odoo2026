@@ -976,7 +976,7 @@ onUnmounted(() => {
 
       <!-- Invoice Details Dialog -->
       <Dialog v-model:open="isInvoiceDetailOpen">
-        <DialogContent class="max-w-2xl">
+        <DialogContent class="sm:max-w-4xl max-w-4xl">
           <DialogHeader>
             <DialogTitle class="flex items-center justify-between text-base">
               <span>Invoice {{ selectedInvoice?.invoiceNumber }}</span>

@@ -77,7 +77,7 @@ function isActive(path: string): boolean {
 }
 
 const navLinkClass =
-  'px-2.5 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5 whitespace-nowrap';
+  'px-2.5 2xl:px-3 py-1.5 rounded-md text-xs lg:text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1.5 shrink-0 whitespace-nowrap';
 const navLinkActiveClass = '!bg-muted !text-foreground font-semibold';
 
 function getRoleDisplay(role?: string): string {
@@ -102,9 +102,9 @@ function getRoleDisplay(role?: string): string {
   <div class="min-h-screen bg-background text-foreground flex flex-col">
     <!-- Top Navigation Header -->
     <header class="border-b border-border bg-card/80 backdrop-blur-md sticky top-0 z-30 shadow-xs">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
-        <!-- Brand & Organization Identity (slim) -->
-        <div class="flex items-center gap-2 min-w-0">
+      <div class="max-w-7xl 2xl:max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 h-16 flex items-center justify-between gap-2 lg:gap-4">
+        <!-- Brand & Organization Identity -->
+        <div class="flex items-center gap-2.5 shrink-0 min-w-0">
           <Avatar class="h-8 w-8 rounded-lg border border-border shadow-xs shrink-0">
             <AvatarImage
               v-if="authStore.state.organization?.logoSrc"
@@ -120,27 +120,26 @@ function getRoleDisplay(role?: string): string {
               />
             </AvatarFallback>
           </Avatar>
-          <span class="font-bold text-foreground tracking-tight text-sm truncate max-w-[140px] sm:max-w-[200px]">
+          <span class="font-bold text-foreground tracking-tight text-sm truncate max-w-[120px] sm:max-w-[180px]">
             {{ authStore.state.organization?.name || 'DealFlow360' }}
           </span>
         </div>
 
-        <!-- Primary Navigation (md+) — labels collapse to icons below xl -->
-        <nav class="hidden md:flex items-center gap-0.5 flex-1 justify-center min-w-0">
+        <!-- Primary Navigation (lg+) -->
+        <nav class="hidden lg:flex items-center gap-1 xl:gap-1.5 flex-1 justify-center min-w-0 px-2">
           <router-link to="/" :class="[navLinkClass, isActive('/') ? navLinkActiveClass : '']">
             <LayoutDashboard class="w-4 h-4 shrink-0" />
-            <span class="hidden xl:inline">Dashboard</span>
-            <Test/>
+            <span class="hidden 2xl:inline">Dashboard</span>
           </router-link>
 
           <router-link to="/catalog" :class="[navLinkClass, isActive('/catalog') ? navLinkActiveClass : '']">
             <Package class="w-4 h-4 shrink-0" />
-            <span class="hidden xl:inline">Catalog</span>
+            <span class="hidden 2xl:inline">Catalog</span>
           </router-link>
 
           <router-link to="/quotations" :class="[navLinkClass, isActive('/quotations') ? navLinkActiveClass : '']">
             <FileText class="w-4 h-4 shrink-0" />
-            <span class="hidden xl:inline">Quotations</span>
+            <span class="hidden 2xl:inline">Quotations</span>
           </router-link>
 
           <router-link
@@ -149,7 +148,7 @@ function getRoleDisplay(role?: string): string {
             :class="[navLinkClass, isActive('/approvals') ? navLinkActiveClass : '']"
           >
             <ShieldCheck class="w-4 h-4 shrink-0" />
-            <span class="hidden xl:inline">Approvals</span>
+            <span class="hidden 2xl:inline">Approvals</span>
           </router-link>
 
           <router-link
@@ -158,7 +157,7 @@ function getRoleDisplay(role?: string): string {
             :class="[navLinkClass, isActive('/warehouses') ? navLinkActiveClass : '']"
           >
             <WarehouseIcon class="w-4 h-4 shrink-0" />
-            <span class="hidden xl:inline">Warehouses</span>
+            <span class="hidden 2xl:inline">Warehouses</span>
           </router-link>
 
           <router-link
@@ -166,7 +165,7 @@ function getRoleDisplay(role?: string): string {
             :class="[navLinkClass, isActive('/billing') ? navLinkActiveClass : '']"
           >
             <Receipt class="w-4 h-4 shrink-0" />
-            <span class="hidden xl:inline">Billing</span>
+            <span class="hidden 2xl:inline">Billing</span>
           </router-link>
 
           <router-link
@@ -174,7 +173,7 @@ function getRoleDisplay(role?: string): string {
             :class="[navLinkClass, isActive('/deal-health') ? navLinkActiveClass : '']"
           >
             <Activity class="w-4 h-4 shrink-0" />
-            <span class="hidden xl:inline">Deal Health</span>
+            <span class="hidden 2xl:inline">Deal Health</span>
           </router-link>
 
           <!-- Org Admin: configuration grouped behind one trigger -->
@@ -182,11 +181,11 @@ function getRoleDisplay(role?: string): string {
             <DropdownMenuTrigger as-child>
               <Button
                 variant="ghost"
-                class="h-8 px-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted rounded-md gap-1.5"
+                class="h-8 px-2.5 text-xs lg:text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted rounded-md gap-1.5 shrink-0"
                 :class="['/rulebook', '/team', '/settings/organization'].some((p) => isActive(p)) ? '!bg-muted !text-foreground font-semibold' : ''"
               >
-                <SlidersHorizontal class="w-4 h-4" />
-                <span class="hidden xl:inline">Administration</span>
+                <SlidersHorizontal class="w-4 h-4 shrink-0" />
+                <span class="hidden 2xl:inline">Administration</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" class="w-52">
@@ -207,8 +206,8 @@ function getRoleDisplay(role?: string): string {
           </DropdownMenu>
         </nav>
 
-        <!-- Right Side: theme toggle + user menu + mobile nav -->
-        <div class="flex items-center gap-1.5 shrink-0">
+        <!-- Right Side: theme toggle + user menu + mobile/tablet nav -->
+        <div class="flex items-center gap-2 shrink-0">
           <!-- Theme toggle -->
           <Button
             variant="ghost"
@@ -222,10 +221,10 @@ function getRoleDisplay(role?: string): string {
             <Sun v-else class="w-4 h-4 opacity-60" />
           </Button>
 
-          <!-- Mobile navigation (below md) -->
+          <!-- Mobile / Tablet navigation (below lg) -->
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="icon" class="md:hidden h-9 w-9">
+              <Button variant="ghost" size="icon" class="lg:hidden h-9 w-9">
                 <Menu class="w-5 h-5" />
               </Button>
             </DropdownMenuTrigger>
