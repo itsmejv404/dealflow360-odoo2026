@@ -1,10 +1,5 @@
 # DealFlow360
 
-> **Enterprise Multi-Tenant Quote-to-Cash Platform**  
-> Streamline end-to-end B2B deal cycles: multi-tier pricing, live margin calculation, discount risk governance, multi-warehouse fulfillment splitting, subscription billing schedules, mid-cycle proration, customer negotiation portals, and deal-health monitoring.
-
----
-
 ## 🚀 Key Capabilities
 
 - 🏢 **Strict Multi-Tenant Isolation**: Shared-schema, tenant-isolated architecture with `organization_id` row-level enforcement, org-namespaced Redis keys, tenant-scoped RabbitMQ / Celery queue payloads, and isolated MinIO S3 storage prefixes.
@@ -48,29 +43,6 @@ All web services are unified behind the **Nginx Reverse Proxy** on port `80`:
 | **[http://localhost:9001](http://localhost:9001)** | **MinIO Console** (S3 Storage Explorer) | `minioadmin` / `minioadmin` |
 | **[http://localhost:15672](http://localhost:15672)** | **RabbitMQ Management Dashboard** | `guest` / `guest` |
 | **[http://localhost:3001](http://localhost:3001)** | **Gotenberg API** (PDF Generation Engine) | Internal Service |
-
----
-
-## 👥 Seeded Demo Credentials
-
-The platform comes pre-seeded with multiple isolated tenants and a platform administrator:
-
-### 1. Platform Super Admin
-- **URL**: [http://localhost/platform](http://localhost/platform)
-- **Email**: `superadmin@dealflow360.com`
-- **Password**: `SuperAdminSecret123!`
-- **Scope**: Platform-level organization provisioning, tenant health metrics, and global audit logs.
-
-### 2. Tenant Organizations
-| Organization | Admin Email | Password | Currency / Timezone | Status |
-|---|---|---|---|---|
-| **Acme Corp** (`acme`) | `admin@acme.com` | `AcmeAdmin123!` | USD ($) / `America/New_York` | Fully Onboarded |
-| **Globex Corp** (`globex`) | `admin@globex.com` | `GlobexAdmin123!` | EUR (€) / `Europe/Berlin` | Fully Onboarded |
-| **Apex Dynamics** (`apex`) | `admin@apexdynamics.io` | *(Set in wizard)* | GBP (£) / `Europe/London` | Pending Onboarding |
-
-> [!TIP]
-> **Try the Live Onboarding Wizard:**  
-> Open [http://localhost/activate?token=apex-onboarding-demo-token-1234567890](http://localhost/activate?token=apex-onboarding-demo-token-1234567890) to test the 3-step Organization Onboarding flow (MinIO logo upload $\rightarrow$ company profile $\rightarrow$ currency & timezone).
 
 ---
 
