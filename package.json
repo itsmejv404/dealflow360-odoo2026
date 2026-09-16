@@ -19,7 +19,9 @@
     "migrate:deploy": "docker compose exec api npm run prisma:deploy -w @dealflow/api",
     "migrate:status": "docker compose exec -w /repo/apps/api api npx prisma migrate status",
     "studio": "docker compose exec -w /repo/apps/api api npx prisma studio",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:backend": "docker compose exec -T api-py python test_e2e.py",
+    "logs:backend": "docker compose logs -f api-py celery-worker rabbitmq"
   },
   "engines": {
     "node": ">=20"

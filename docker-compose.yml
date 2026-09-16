@@ -62,7 +62,23 @@ services:
       - "3001:3000"
     networks: [dealflow]
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [dealflow]
+
   api:
+    profiles: ["legacy-node"]
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -103,6 +119,82 @@ services:
       start_period: 20s
     networks: [dealflow]
 
+  api-py:
+    build:
+      context: .
+      dockerfile: apps/api-py/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      PYTHONUNBUFFERED: "1"
+      API_PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_SYNC_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672//
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_PORT: ${MINIO_PORT}
+      MINIO_USE_SSL: ${MINIO_USE_SSL}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      GOTENBERG_URL: ${GOTENBERG_URL:-http://gotenberg:3000}
+      JWT_SECRET: ${JWT_SECRET:-dealflow360-super-secret-key-for-dev-only}
+      SOCKET_CORS_ORIGINS: ${SOCKET_CORS_ORIGINS:-http://localhost,http://localhost:5173,http://localhost:5174}
+      PORTAL_URL: ${PORTAL_URL:-http://localhost}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api-py:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [dealflow]
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: apps/api-py/Dockerfile
+    command: celery -A src.lib.celery_app worker --loglevel=info -c 4 -Q default,org_approval_notifications,org_backorder_consolidation,org_billing_schedules,org_proration_runs,org_deal_health_scans
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_SYNC_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672//
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_PORT: ${MINIO_PORT}
+      MINIO_USE_SSL: ${MINIO_USE_SSL}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      GOTENBERG_URL: ${GOTENBERG_URL:-http://gotenberg:3000}
+      JWT_SECRET: ${JWT_SECRET:-dealflow360-super-secret-key-for-dev-only}
+    volumes:
+      - ./apps/api-py:/app
+    networks: [dealflow]
+
   workspace:
     build:
       context: .
@@ -128,7 +220,7 @@ services:
   nginx:
     image: nginx:1.27-alpine
     depends_on:
-      api:
+      api-py:
         condition: service_started
       workspace:
         condition: service_started
